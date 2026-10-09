@@ -10,6 +10,13 @@
 - 为什么不选：TODO(你)
 - 待澄清（2026-10-09）：现有算子集是为「工具名 + 参数」设计的，而 resources 用 URI 标识。若要表达「允许读 `merchant://catalog/*` 但禁止 `merchant://orders/*`」，需要扩算子（URI 前缀或模式匹配）或换表达方式——这会触及「绝不做通用 DSL」的边界，需在此记录取舍。
 
+- 候选备选（AI 提议，2026-10-10，待你选）：
+  - A 复用 glob 做 URI 匹配（`match_uri: "merchant://catalog/*"`），不新增算子
+  - B 新增 URI 专用算子（前缀 + 通配，仍是 glob 语义），命名更清晰
+  - C 引入正则（表达力强，但难静态分析、易灾难性回溯，与「不做通用 DSL」冲突）
+  - D 策略改为 Python 函数（表达力无限，但不可审计、不可哈希、不可重放，原决策已否掉）
+  - 建议：A 或 B，并把边界写成「URI 匹配只支持前缀与 glob，不支持正则」；策略 schema 增加与 `tools:` 并列的 `resources:` 段，而不是把 URI 塞进工具名匹配
+
 ## ADR-0002 预算语义
 
 - 决策（上一轮已定）：reserve 然后 commit/release，SQLite 事务 + 幂等键 + TTL 回收。
@@ -78,6 +85,23 @@
 
 - 背景：tools/list 结果可因授权不同而不同（可做工具隐藏），并带 ttlMs / cacheScope；若上游声明 public 而网关的过滤结果依赖 agent 身份，直接沿用会越权泄露。
 - 备选 / 决策 / 为什么不选：TODO(你)
+
+## ADR-0011 拦截面覆盖范围与能力暴露（候选，待你认可）
+
+- 背景：当前架构的 I1 与 `Decision` 只绑定在 `tools/call` 上；而 resources 是 server 可暴露的一等能力面（`resources/list`、`resources/read`、订阅通知），不拦即构成策略与审计的双重旁路。
+- 证据：
+  - 规格：resources 能力含 `listChanged` / `subscribe` 两个可选特性；`resources/read` 返回 `contents`；`resources/list` 结果可因授权不同而不同。
+  - 威胁：经 `resources/read` 读取受限数据不产生 `tools/call` 记录，既绕过策略也绕过审计；旁路有三种形态（一次性读取、枚举、持续推送）。
+  - 架构：现有 I1 的表述是「不存在未判定就放行的调用」，作用域实际只有 tools/call。
+- 必要性：不扩则 I1 的作用域与风险不匹配；且属低成本扩展（机制已存在，只扩作用域）。
+- 可行性：`Decision` 从「工具调用」抽象为「被拦截的 MCP 请求」；policy 增加 URI 维度（见 ADR-0001 候选备选）；enforce 增加 resources 分支；主要新增工程量在 `resources/list` 的分页过滤与通知过滤。
+- 安全性：不削弱现有保护，只扩大同一机制的作用域；需注意只拦 read 不拦 list 会留下枚举旁路。
+- 能力暴露建议：
+  - 默认保留 resources 能力并按 URI 用策略过滤；多上游取并集声明（任一上游有则声明）。
+  - `subscribe: true` 只在网关自己实现了通知过滤时才声明（不能承诺做不到的事）。
+  - 提供配置开关 `expose_resources: false` 作为粗粒度模式（从能力声明摘掉）；此时客户端仍可能直接调用，按 ADR-0007 归为结构性错误返回。
+- 决策 / 备选 / 为什么不选：TODO(你)
+- 注：会触及先验架构（Decision 适用范围与 I1 表述），按 AGENTS.md 需你明确认可后落地。
 
 ## 参考笔记（AI 记录，非决策本身）
 
