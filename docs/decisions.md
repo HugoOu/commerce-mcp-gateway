@@ -91,7 +91,7 @@
 - 背景：tools/list 结果可因授权不同而不同（可做工具隐藏），并带 ttlMs / cacheScope；若上游声明 public 而网关的过滤结果依赖 agent 身份，直接沿用会越权泄露。
 - 备选 / 决策 / 为什么不选：TODO(你)
 
-## ADR-0011 拦截面覆盖范围与能力暴露（候选，待你认可）
+## ADR-0011 拦截面覆盖范围（已采纳，2026-10-10）
 
 - 背景：当前架构的 I1 与 `Decision` 只绑定在 `tools/call` 上；而 resources 是 server 可暴露的一等能力面（`resources/list`、`resources/read`、订阅通知），不拦即构成策略与审计的双重旁路。
 - 证据：
