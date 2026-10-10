@@ -10,7 +10,7 @@
 ## 2. 八条切分理由
 
 1. **网关做成独立 MCP server 进程，不做成库。** 协议边界强制显式处理传输、会话与能力协商；可独立观测与重启；演示直观。代价是转发要自己写（已核实：Python SDK v2 无内置代理，服务端类为 `MCPServer`）。
-2. **单一执行点。** 所有 tools/call 必经 authorize → decide → enforce → forward → sanitize → settle → record，无旁路。这构成可测试不变量「不存在未判定就放行的调用」。
+2. **单一执行点。** 所有被拦截的方法调用（`tools/*`、`resources/*`，含 `prompts/get`；见 ADR-0011）必经 authorize → decide → enforce → forward → sanitize → settle → record，无旁路。这构成可测试不变量 I1：「不存在未经 Decision 就放行的方法调用」。
 3. **决策是一等公民。** `Decision = allow | deny(reason_code) | require_approval(approval_id) | transform(patch)`。策略输出它、证据记录它、重放比对它。
 4. **确定性核心 + 副作用边缘。** 策略求值、预算算术、脱敏、证据哈希为纯函数；时间、随机、上游响应、用户审批作为被记录的输入。这是可复算重放的前提。
 5. **两阶段预算。** reserve → commit / release，配单文件 SQLite（WAL）+ 进程内单写者，DB 约束兜底。
@@ -63,7 +63,7 @@ flowchart TB
 | 客户端 | agent driver（薄循环） | 以 MCP client 身份连网关，产出 tools/call |
 | 网关前门 | `frontdoor/` | MCP server 端点（Streamable HTTP + stdio）、会话管理（Mcp-Session-Id）、能力协商透传 |
 | 判定 | `policy/` | 策略加载（YAML→pydantic→内存决策结构）、求值、Decision 构造 |
-| 执行 | `enforce/` | 单一执行点，落实 Decision；deny-by-default |
+| 执行 | `enforce/` | 单一执行点（覆盖 tools/* 与 resources/*），落实 Decision；deny-by-default；唯一持有上游客户端 |
 | 预算 | `budget/` | reserve/commit/release、幂等键、TTL 回收、重启对账 |
 | 结果处理 | `sanitize/` | 注入筛查、PII 脱敏、audience 过滤 |
 | 审批 | `approval/` | durable 待审批队列、CLI 与 elicitation 投递 |
@@ -72,7 +72,7 @@ flowchart TB
 | 上游 | `mcp_servers/` | mock merchant、mock PSP、故障注入 |
 | 存储 | `store/` | SQLite（ledger、budget、approvals） |
 
-## 5. 一次 tools/call 的时序
+## 5. 一次被拦截请求的时序（以 tools/call 为例）
 
 1. 前门收到 JSON-RPC，解析出 agent 身份与会话
 2. `policy.evaluate(agent, tool, args)` → Decision
@@ -84,11 +84,13 @@ flowchart TB
 8. 写证据（decision、policy 版本与摘要、预算前后、上游请求与响应摘要、脱敏标记）+ 发 span
 9. 返回结果给 agent
 
+> `resources/read`、`resources/list`、`resources/subscribe` 走同一条链；差异在步骤 6 与 7——`resources/list` 需要按 URI 过滤并**重签游标**（ADR-0013），订阅通知需要在流上做同等检查。
+
 ## 6. 四条可测试不变量（简历上的数字来源）
 
 | 编号 | 不变量 | 测法 |
 | --- | --- | --- |
-| I1 | 不存在未判定放行 | 执行点是唯一入口，插桩测试证明无旁路 |
+| I1 | 不存在未经 Decision 就放行的方法调用（覆盖 tools/* 与 resources/*） | 执行点是唯一入口；插桩测试 + import-linter 分层契约证明无旁路 |
 | I2 | 并发安全：`sum(committed) + sum(active holds) ≤ limit` | N=50 并发压测 |
 | I3 | 防篡改：篡改任一记录 verify 失败 | 翻转一个字节必须被检出 |
 | I4 | 可复算：同一证据包重放决策序列逐条一致 | 重放确定性率 |
