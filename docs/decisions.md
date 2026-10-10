@@ -50,7 +50,13 @@
 ## ADR-0006 审批闸门机制（候选，待决策）
 
 - 背景：2026-07-28 起 `tools/call` 可用 `resultType: "input_required"` 走 mrtr 机制暂停等人；架构第 7 条目前写的是「审批是 durable wait，投递通道为 CLI 与 MCP elicitation」。
-- 备选：TODO(你)（协议原生 input_required/mrtr；自造 CLI 通道；两者并用）
+- 证据：
+  - 规格给了两条 in-band 通道：`elicitation`（客户端能力）与 `input_required` + mrtr（工具调用可暂停等人）；且 Servers MAY respond to tools/call with an InputRequiredResult——网关作为 agent 的 server，可以**自己合成** input_required 来做审批，不必等上游发起。
+  - 既有实现（2026-10-10 调研）：
+    - node9-proxy：危险动作 held for review，审批就在对话里（inline review），也可走团队审批人（dashboard / Slack）；明确 held action 在你回答前绝不执行（fail-closed）。
+    - cordum：策略判定里有 `REQUIRE_APPROVAL` 这一类；且**不信任审批记录本身**——要求同一租户下已 resolved 的审批审计事件、`approval_ref` 与 `action_hash` 同时匹配，光有审批请求事件不算。
+- 推荐：默认走**协议原生**——网关自己合成 `input_required`，把 `requestState` 持久化到 SQLite（满足 durable wait），CLI 作为兜底通道；审批必须**绑定动作指纹**（参数摘要 + 策略版本）且单次使用；等待期间动作绝不执行（fail-closed）；超时默认拒绝。
+- 备选：a) 纯协议原生（input_required / elicitation）；b) 纯自造 CLI 通道；c) 两者并用（推荐）。
 - 决策：TODO(你)
 - 为什么不选：TODO(你)
 - 注：会触及先验架构，按 AGENTS.md 需要证据 + User 认可。
@@ -58,6 +64,11 @@
 ## ADR-0007 策略拒绝的返回形态（候选，待决策）
 
 - 背景：`Decision.deny` 落到协议层有两种形态——工具执行错误（`isError: true`，模型可自适应）与 JSON-RPC 协议错误（模型无法自适应）。
+- 证据：
+  - 规格：工具执行错误 = `isError: true` + content 载荷（模型可读）；协议错误 = JSON-RPC error（通常由客户端库处理）。
+  - 既有实现（2026-10-10 调研）：JanuScope 走**事前告知**——把策略信息体现在工具元数据里，助手在调用前自我审查（README 记录 Copilot 主动拒绝 UPDATE、拒绝取邮箱），而不是被拒之后才纠正。
+  - 对照：HTTP 世界对授权拒绝用 403 硬错误，但那是给人写的客户端；agent 场景需要模型可读的反馈才能继续。
+- 推荐：三层并用（事前策略上下文 / 事中可自适应拒绝 / 硬拒绝最小化 + 结构性错误用协议错误），详见下方「建议方案」表。
 - 备选：TODO(你)
 - 决策：TODO(你)
 - 为什么不选：TODO(你)
@@ -81,16 +92,28 @@
 ## ADR-0008 工具名冲突消歧（候选，待决策）
 
 - 背景：工具名唯一性只在单个 server 内成立；网关聚合 merchant 与 PSP 会撞名；规格建议加 server 标识前缀，且不能依赖 serverInfo 的 name。
+- 证据：
+  - 规格：工具名 SHOULD 只允许 `A-Za-z0-9`、`_`、`-`、`.`；唯一性只在单个 server 内成立；聚合方 SHOULD 用 server 标识前缀消歧。
+  - 既有实现（2026-10-10 调研）：openziti/mcp-gateway 自动加前缀，用 `fs:read_file` 形式——注意它用了 `:`，而 `:` 不在规格建议的字符集内；metamcp 用 namespace 分组并支持按 namespace 覆盖工具名。
+- 推荐：由网关用**配置里的 server 别名**生成前缀，格式 `<alias>__<tool>`（双下划线，落在规格允许字符集内）；别名重复或加前缀后仍冲突则**启动即失败**（fail fast）；映射关系写入证据，便于从一次调用反查上游 server。
 - 备选 / 决策 / 为什么不选：TODO(你)
 
 ## ADR-0009 是否采用 x-mcp-header（候选，待决策）
 
 - 背景：该扩展把参数镜像进 HTTP 头供中间人使用；规格禁止镜像敏感参数。
+- 证据：
+  - 规格：把工具参数镜像成 `Mcp-Param-{name}` HTTP 头，供负载均衡 / 代理 / WAF 在不解析消息体的情况下路由与检查；约束含仅限原始类型（integer / string / boolean）、必须静态可达、整数须在 IEEE754 安全范围内、大小写不敏感唯一、不得含控制字符；并明确警告不要把密码 / 密钥 / 令牌 / PII 标成 header。
+  - 采用情况（2026-10-10 调研）：按 `x-mcp-header` / `Mcp-Param` 在 GitHub 检索几乎没有真实采用，属全新扩展。
+- 推荐：**不主动使用**（网关本来就要解析 body，用它没有收益），但实现两条防御——转发时保留上游声明的 `Mcp-Param-*` 头（否则破坏上游的中间人语义）；策略层检查敏感参数是否被镜像成 header，命中则拒绝或告警。
 - 备选 / 决策 / 为什么不选：TODO(你)
 
 ## ADR-0010 tools/list 的过滤与缓存语义（候选，待决策）
 
 - 背景：tools/list 结果可因授权不同而不同（可做工具隐藏），并带 ttlMs / cacheScope；若上游声明 public 而网关的过滤结果依赖 agent 身份，直接沿用会越权泄露。
+- 证据：
+  - 规格：列表操作带 `ttlMs` 与 `cacheScope`，且结果可因授权不同而不同。
+  - 先例（2026-10-10 调研）：HTTP 的经典解法是 `Vary`——在响应里声明除方法与 URL 外还有哪些请求头影响了内容，从而让缓存按这些维度分键（MDN：Vary 用来为内容协商创建 cache key）；metamcp 则用按 endpoint / namespace 划分视图的方式规避跨客户端复用。
+- 推荐：网关缓存上游列表时按（上游标识, 上游游标）分键；对外返回的列表按**授权指纹**分键，绝不跨授权复用；若上游声明 `cacheScope: public` 而你的过滤依赖 agent 身份，出口必须收紧为 `private`（或按指纹分区），等价于给列表加上 `Vary: Authorization`。
 - 备选 / 决策 / 为什么不选：TODO(你)
 
 ## ADR-0011 拦截面覆盖范围（已采纳，2026-10-10）
