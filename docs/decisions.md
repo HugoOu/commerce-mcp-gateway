@@ -110,6 +110,41 @@
 - 为什么不选：a) 留下策略与审计的双重旁路，且 I1 的作用域与风险不匹配；b) 留下枚举旁路——list 会泄露 URI，agent 仍可逐个尝试 read；c) `ping` / `logging` 不读写业务数据，纳入只增加噪音与开销。
 - 注：会触及先验架构（Decision 适用范围与 I1 表述），按 AGENTS.md 需 User 明确认可后落地——已于 2026-10-10 认可。
 
+## ADR-0012 能力暴露与聚合（候选，含证据链，待你决策）
+
+- 背景：网关同时面对 merchant 与 PSP；能力声明在 `initialize` 协商；若声明 `subscribe: true` 等于承诺投递经过策略过滤的通知。
+- 证据：
+  - 规格：resources 能力含 `listChanged` / `subscribe`；`tools/list` 结果 MAY vary by the authorization presented on the request（按授权过滤是规格承认的语义）；聚合方 SHOULD 用 server 标识前缀消歧。
+  - 既有实现（2026-10-10 调研）：
+    - openziti/mcp-gateway：把多个后端聚合成一个端点，工具自动加命名空间前缀（`fs:read_file`、`github:create_issue`）。
+    - metamcp：把多个 MCP server 聚合成一个；用 namespace 分组，支持 server 级与工具级启停、按 namespace 覆盖工具名 / 描述 / 注解、按 endpoint 分配 namespace 并带 auth。
+  - 结论：业界做法是「聚合方暴露按客户端过滤后的视图」，而不是全局摘掉能力。
+- 备选：A 默认摘掉 resources 能力；B 保留能力 + 按 URI 策略过滤；C 保留能力但不实现过滤。
+- 推荐方案（B）：
+  - 能力声明取并集（任一上游有则声明），具体 URI 能否读由策略决定。
+  - `subscribe: true` 仅在网关实现了通知过滤后声明。
+  - 提供配置开关 `expose_resources: false` 作为粗粒度模式；此时客户端直接调用按 ADR-0007 归为结构性错误。
+  - 工具与资源名统一加 namespace 前缀（对齐 openziti/metamcp 与规格建议），同时解决 ADR-0008 的消歧。
+  - 进阶：像 metamcp 那样支持用网关自己的注解覆盖上游 hint（把不可信声明替换成你的判定），比「忽略注解」更强。
+- 为什么不选 A：全有全无的控制，会让「策略拒绝」与「功能不存在」无法区分，并砍掉上游的合法用途。
+- 为什么不选 C：保留能力却不拦，等于保留一个旁路。
+- 决策：TODO(你)
+
+## ADR-0013 分页与过滤语义（候选，含证据链，待你决策）
+
+- 背景：`resources/list`、`tools/list` 都支持分页与缓存（`nextCursor` / `ttlMs` / `cacheScope`）；网关按授权过滤条目后，上游游标的语义不再成立。
+- 证据（Google AIP-158，2026-10-10 调研）：
+  - Opacity：page token 必须是 opaque 且不可被用户解析，Base64 不算充分混淆；理由是一旦可解析，分页实现细节就变成 API 表面的一部分。
+  - 参数绑定：分页时其他参数必须与产生 token 的调用一致。
+  - Degraded skip：无法满足的 skip 必须返回 200 + 空结果集；已知超出集合范围时不得返回 next_page_token；允许「空页 + next_page_token」，靠 next_page_token 缺省来信号结束。
+- 推论：网关必须自己签发游标（不能透传上游游标）——透传会泄露上游实现细节、违反 opacity；而且你的过滤条件本身就是「其他参数」的一部分，上游 token 与它并不绑定。
+- 推荐方案：
+  - fetch-through 填页：内部按上游游标连续拉取，直到凑满一页允许项或上游耗尽；对外发放自己的 opaque 游标。
+  - 采用 AIP-158 的 degraded skip 语义：允许返回「空页 + 非空游标」，由游标缺省表示结束——这正好回应「空页会不会误导客户端」。
+  - 设上限：单次客户端请求最多连续拉 N 页（建议 5），超限返回当前内容与「未耗尽」游标；上游调用数计入成本治理。
+  - 缓存：按（授权指纹, 上游游标）缓存原始页，避免重复拉取；不得跨授权复用（呼应 ADR-0010）。
+  - 恶意上游用永不结束的游标造成放大：以 N 页上限 + 每 agent 速率限制兜底。
+- 决策 / 为什么不选：TODO(你)
 ## 参考笔记（AI 记录，非决策本身）
 
 ### 2026-10-09 为什么协议错误不适合做策略拒绝
