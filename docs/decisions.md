@@ -27,13 +27,25 @@
 ## ADR-0002 预算语义
 
 - 决策（上一轮已定）：reserve 然后 commit/release，SQLite 事务 + 幂等键 + TTL 回收。
-- 备选：TODO(你)
+- 证据（2026-10-10 调研）：
+  - Stripe 的 manual capture：authorization 先占用资金、之后 capture 才真正扣款（Authorizing a payment guarantees the amount by holding it on the customer payment method）；charge 上的 `capture_before` 标明授权何时过期——与 reserve → commit/release + TTL 回收逐条对应。
+  - Stripe 的幂等键：safely retrying requests without accidentally performing the same operation twice；执行开始后保存首次请求的状态码与响应体，同一 key 的重试返回已保存的响应（包括 500）——与幂等键 (session_id, tool_call_id) 对应，并提示重放要忠实，失败也要原样重放。
+  - 对照：纯内存计数器重启即丢；仅由账本推导余额会在在途窗口超支（两笔 30 元并发对 100 元上限，会都看到 100 可用）。
+- 推荐：保持 reserve → commit/release，落 SQLite（WAL）+ 进程内单写者、DB 约束兜底；reserve 用 IMMEDIATE 事务与条件更新；幂等键取 (session_id, tool_call_id)；上游失败或超时 release；启动时回收超过 TTL 的 hold 并对账；记录 hold 生命周期以便复算。
+- 备选：a) 纯内存计数器；b) 仅由账本推导余额；c) 外部预算服务。
+- 决策：TODO(你)
 - 为什么不选：TODO(你)
 
 ## ADR-0003 证据语义
 
 - 决策（上一轮已定）：全局哈希链（每次调用一条，含 deny）+ 运行证据包（含 Merkle 根）。
-- 备选：TODO(你)
+- 证据（2026-10-10 调研）：
+  - AWS CloudTrail 日志完整性校验：SHA-256 哈希 + SHA-256/RSA 签名；能判断日志文件是否被删除或修改；为每个日志文件算一个哈希，并每小时生成一个 digest file 引用这些文件与其哈希——与「每次调用一条记录 + 每次运行的证据包」逐条对应。
+  - RFC 6962（Certificate Transparency）：日志是 append-only 且公开可审计，append-only 性质用 Merkle Tree 实现，可证明某个版本与之前版本一致；提供 Merkle Audit Path（包含证明）。
+  - Sigstore Rekor：把签名元数据记入不可变记录，提供 inclusion proof 与日志完整性校验。
+- 推荐：保持双形态——全局哈希链（每条记录含 prev_hash，防删除与改序）+ 运行证据包（JSONL + manifest，manifest 带该次运行记录的 Merkle 根，可做包含证明）；规范化用键排序（JCS 思路）；非确定性字段作为输入记录而非重算；提供 verify（重算链与根）与 replay（重放判定）两条命令。
+- 备选：a) 只做每次调用的链；b) 只做每次运行的包；c) 用数据库事务 / WAL 替代。
+- 决策：TODO(你)
 - 为什么不选：TODO(你)
 
 ## ADR-0004 网关传输选择（Step 3 决定）
