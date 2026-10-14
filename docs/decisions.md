@@ -75,7 +75,7 @@
 - 依据：TODO(你)
 
 
-## ADR-0006 审批闸门机制（已采纳，2026-10-10）
+## ADR-0006 审批闸门机制（已采纳，2026-10-15 细化）
 
 - 背景：2026-07-28 起 `tools/call` 可用 `resultType: "input_required"` 走 mrtr 机制暂停等人；架构第 7 条目前写的是「审批是 durable wait，投递通道为 CLI 与 MCP elicitation」。
 - 证据：
@@ -87,7 +87,7 @@
   - 架构影响：网关作为 server 必须支持 MRTR 才能转发/合成 server→client 请求，作为 client 必须处理上游返回的 `input_required`；`inputRequests` 是 **map**，一次响应可携带多个请求（如同时要 elicitation 与 sampling），所以 frontdoor 需要扇出/扇入。
 - 推荐：默认走**协议原生**——网关自己合成 `input_required`，**审批的暂停状态优先放进 `requestState`**（协议刻意把状态推给客户端持有），只有需要跨重启恢复的审批才落库（SQLite）并**安全绑定到会话/用户**；CLI 作为兜底通道；审批必须**绑定动作指纹**（参数摘要 + 策略版本）且单次使用；等待期间动作绝不执行（fail-closed）；超时默认拒绝。
 - 备选：a) 纯协议原生（input_required / elicitation）；b) 纯自造 CLI 通道；c) 两者并用。
-- 决策（已定，2026-10-10）：采纳推荐方案——协议原生 input_required + CLI 兜底；审批绑定动作指纹且单次使用；等待期间动作绝不执行（fail-closed）；超时默认拒绝；`requestState` 持久化到 SQLite。
+- 决策（已定，2026-10-15 细化）：采纳推荐方案——协议原生 `input_required` + CLI 兜底；**暂停状态优先放进 `requestState`**（MRTR 刻意把状态推给客户端），只有需要跨重启恢复的审批才落库并安全绑定会话/用户；审批绑定动作指纹且单次使用；等待期间动作绝不执行（fail-closed）；超时默认拒绝。
 - 为什么不选 a：纯协议原生依赖客户端支持 elicitation / mrtr，通用性差。
 - 为什么不选 b：纯自造通道不可被通用 MCP 客户端使用，且无法复用协议的状态语义。
 - 注：会触及先验架构，按 AGENTS.md 需要证据 + User 认可。
@@ -153,6 +153,10 @@
   - 规格：列表操作带 `ttlMs` 与 `cacheScope`，且结果可因授权不同而不同。
   - 先例（2026-10-10 调研）：HTTP 的经典解法是 `Vary`——在响应里声明除方法与 URL 外还有哪些请求头影响了内容，从而让缓存按这些维度分键（MDN：Vary 用来为内容协商创建 cache key）；metamcp 则用按 endpoint / namespace 划分视图的方式规避跨客户端复用。
 - 推荐：网关缓存上游列表时按（上游标识, 上游游标）分键；对外返回的列表按**授权指纹**分键，绝不跨授权复用；若上游声明 `cacheScope: public` 而你的过滤依赖 agent 身份，出口必须收紧为 `private`（或按指纹分区），等价于给列表加上 `Vary: Authorization`。
+  - 补充（2026-10-15，server/utilities/caching 原文）：
+    - 规格要求服务端对以下操作的 `resultType: complete` 结果**必须**带缓存提示：`server/discover`、`tools/list`、`prompts/list`、`resources/list`、`resources/templates/list`、`resources/read`。→ 网关对这六类操作是**服务端**，所以它**构造**的结果（例如过滤后的 `tools/list`）**必须带 `ttlMs` / `cacheScope`**。
+    - cache key 的定义是「请求方法 + 影响结果的请求参数」（如 `resources/read` 的 `uri`、分页列表的 `cursor`），且 **Clients MUST NOT serve a cached response for a request whose method or parameters differ**。→ 授权属于「影响结果的参数」，必须进 key（本条推荐的规格依据）。
+    - **通过 MRTR 重试的请求（带 `inputResponses` 或 `requestState`）结果 MUST NOT 被缓存**，因为它们依赖的输入不在 cache key 里。
 - 决策（已定，2026-10-10）：采纳推荐方案。
 - 备选：原样透传上游的 `cacheScope`。
 - 为什么不选：过滤结果依赖 agent 身份，而 public 缓存不区分身份，透传会导致越权泄露（把 A 的工具视图喂给 B）。
@@ -199,6 +203,7 @@
   1. 不可信 hint 只能用于**收紧**（例如 `destructiveHint: true` 触发人工审批），绝不用于**放行**；
   2. 出口不原样透传上游 hint：剥离或标记为不可信，避免客户端基于谎言自动放行。
 - 后续扩展（future work）：用网关自己的判定覆盖上游注解（对齐 metamcp 的 namespace 注解覆盖），以及注解与策略的显式映射表。
+- 补充（2026-10-15）：**sampling 不声明、不代理**——它已在 2026-07-28 弃用（规格建议改为直接集成 LLM provider API），且会把模型调用推到客户端侧使内容无法被策略约束。若上游仍在 `inputRequests` 里发 `sampling/createMessage`，网关**拒绝该子请求**并给 `reason_code`，而不是让整批失败（同批的 elicitation 仍可完成）。
 
 ## ADR-0013 分页与过滤语义（已采纳，2026-10-10）
 
@@ -298,7 +303,7 @@
 - 备选：a) 不设会话，所有状态按单次请求处理；b) 借用 agent 的 run id 但不校验。
 - 为什么不选 a：预算与审批在语义上本就跨请求。
 - 为什么不选 b：可被伪造的会话键会破坏预算与证据的独立性。
-- 决策（已定，2026-10-15）：采纳推荐方案——网关自定义 `session_id`（agent 身份 + run id），状态落 SQLite，TTL 与显式关闭回收，对上游不暴露。
+- 决策（已定，2026-10-15，含细化）：采纳推荐方案——网关自定义 `session_id`（agent 身份 + run id）；**尽量少自持状态**：暂停状态优先走 `requestState`，只有预算台账与证据账本必须落盘；落盘状态要安全绑定会话/用户，用 TTL 与显式关闭回收，对上游不暴露。
 
 ## ADR-0018 版本处理策略（已采纳，2026-10-15）
 
@@ -315,7 +320,7 @@
 - 为什么不选 a：协议层已闭环（错误 + 支持列表 + 重试），翻译层是重复实现且成本高。
 - 为什么不选 b：不探测会让不匹配到运行期才暴露；而 mock 由我们实现，启动期探测是零成本。
 - 决策（已定，2026-10-15）：采纳推荐方案——逐边协商 + 启动时 `server/discover` 探测 + 不匹配即失败 + 不翻译。
-## ADR-0019 身份与凭证模型（候选，含证据链，待你决策）
+## ADR-0019 身份与凭证模型（已采纳，2026-10-15）
 
 - 背景：Authorization 一节暴露出网关有两个身份职责（下游作为 resource server 校验令牌、上游作为 client 获取凭证），但架构里没有对应模块，也没有决策。
 - 证据：
@@ -335,9 +340,10 @@
 - 为什么不选 a：T4 无法被真实测试，评测里「授权绑定参数」那条声称就没有证据。
 - 为什么不选 b：两个职责（校验入站、提供出站）与 frontdoor / enforce 的关注点不同，混进去会让执行点变厚。
 - 需要的架构补充（待你认可，按 AGENTS.md）：分层职责表新增 `identity/` 一行；frontdoor 行补「令牌校验入口」；证据记录加 `authz_basis` 字段。
-- 决策 / 为什么不选：TODO(你)
+- 决策（已定，2026-10-15）：采纳推荐方案——新增 `identity/` 模块（`validate_inbound` 产出 `AuthorizationBasis`，`CredentialProvider` 提供上游凭证）；demo 用静态凭证实现、按令牌交换与 URL 模式授权预留接口；下游校验真做；证据记录加 `authz_basis`。
+- 为什么不选「全部 stub」：T4 无法真实测试，评测里「授权绑定参数」那条声称没有证据。
 
-## ADR-0020 授权与策略的合成（候选，含证据链，待你决策）
+## ADR-0020 授权与策略的合成（已采纳，2026-10-15）
 
 - 背景：scope 是「授权上限」（能做什么），policy 是「业务约束」（这笔钱能不能花）；两者必须合成一个 `Decision`，但合成规则未定。
 - 证据：
@@ -350,7 +356,7 @@
 - 为什么不选 a：scope 是粗粒度，表达不了金额上限与商户白名单。
 - 为什么不选 b：忽略授权等于把令牌当装饰，T4 又失去意义。
 - 为什么不选 c：**策略永远不能放宽授权**，否则一次错误配置就能把权限放大——这与「不可信 hint 只能收紧」是同一条原则。
-- 决策 / 为什么不选：TODO(你)
+- 决策（已定，2026-10-15）：采纳推荐方案——`scope 允许 ∩ policy 允许` 才放行；任一层未知即 deny（fail-closed）；两层各自产出 `reason_code`；`Decision` 增加 `decided_by` 标注。
 ## ADR-0021 审批与敏感信息的通道选择（候选，含证据链，待你决策）
 
 - 背景：ADR-0006 定了审批走协议原生，但没定「用 form 还是 URL 模式」；而规格对敏感信息有硬性要求。
@@ -359,14 +365,27 @@
   - **Servers MUST NOT use form mode elicitation to request sensitive information such as passwords, API keys, access tokens, or payment credentials**；涉及此类信息 **MUST** 用 URL 模式。
   - URL 模式引入于 2025-11-25，规格注明其设计与实现**在后续版本可能变化**；URL 模式**不是**用于授权 MCP client 访问 server 的。
   - 响应差异：form 模式的 accept 带 `content`；**URL 模式的 `content` 省略**（用户在外部页面完成）。
-- 推荐：
+  - 安全要求（同页 Security Considerations，2026-10-15 核实）：Servers **MUST bind elicitation requests to the client and user identity**；**MUST NOT** 在 URL 里带终端用户的敏感信息（凭证、PII）；**MUST NOT** 提供**预认证**的 URL（否则恶意客户端可借它冒充用户）；SHOULD 用 HTTPS（非开发环境）；**MUST NOT** 靠客户端提供的用户标识（可伪造，应靠授权识别用户）；Clients **MUST NOT** 自动预取 URL、**MUST** 在显式同意后才打开、**MUST** 先展示完整 URL、**MUST** 在客户端与 LLM 无法检查内容的方式下打开（规格举例：iOS 的 SFSafariViewController 可以，WkWebView 不行）、SHOULD 高亮域名并警告 Punycode。
+  - 行业先例（2026-10-15 调研，Stripe 3DS 文档）：3DS 在卡交易被触发时由**发卡行**要求持卡人认证（密码 / 一次性码 / 生物识别）；**PSD2 下的强客户认证（SCA）**在 EEA、英国、印度、日本、澳大利亚等地要求卡支付使用 3DS。→「敏感支付步骤必须离开应用、到发卡方完成」是支付业的既定做法，正是 URL 模式的同构先例。
+- 推荐（2026-10-15 经调研确认并细化）：
   - 审批闸门里「是否同意这笔支付 / 是否批准这个动作」这类**非敏感确认**用 **form 模式**（布尔或单选即可）。
-  - 任何**敏感信息**（支付凭证、密钥、第三方授权）一律走 **URL 模式**，网关只转达 URL 与上下文，不接触内容。
+  - **绑定身份**：审批请求必须绑定到具体的 client 与 user（规格 MUST），不能做一个全局「批准」入口。
+  - 任何**敏感信息**（支付凭证、密钥、第三方授权）一律走 **URL 模式**，网关只转达 URL 与上下文，不接触内容；且 URL 里**不得**含用户敏感信息、**不得**是预认证链接（两条 MUST NOT）。
+  - 收到 form 模式的响应后，网关要**按 `requestedSchema` 校验**再采信。
   - 判定规则落进 `approval/` 与 `sanitize/`：维护「敏感字段类别清单」，命中即强制 URL 模式。
 - 备选：a) 全部用 form 模式；b) 全部用 URL 模式。
 - 为什么不选 a：直接违反规格的两条 MUST。
 - 为什么不选 b：简单确认走外部跳转会显著增加用户摩擦，且 URL 模式的设计仍在演进。
 - 决策 / 为什么不选：TODO(你)
+
+### 2026-10-15 roots 与 sampling 在 2026-07-28 整体弃用
+
+两条都是**整体弃用**（不只是字段），规格给的替代方案很明确：
+
+- **roots**：New implementations SHOULD NOT adopt it；existing implementations SHOULD migrate to **passing directories or files via tool parameters, resource URIs, or server configuration**。另有一条关键事实：**The protocol does not enforce that servers stay within roots**——所以 roots 从来不是边界，只是提示；再叠加「由被治理方声明」这一点，**它不能当授权依据**。
+- **sampling**：New implementations SHOULD NOT adopt it；existing implementations SHOULD migrate to **integrating directly with LLM provider APIs**。规格同时要求 **SHOULD always be a human in the loop with the ability to deny sampling requests**。
+
+对威胁模型的影响：roots 与 sampling 都不必再当作「潜在旁路」来防（一个已弃用且非强制，一个已弃用且建议自建 LLM 直连）；但仍要在文档里声明「本项目不支持这两项」。
 
 ### 2026-10-15 MRTR 把「旁路」变成了「可见数据」
 
