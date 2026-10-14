@@ -61,6 +61,7 @@
   - 旧形态（`Mcp-Session-Id` 会话、GET 独立流、`Last-Event-ID` 恢复）属于 2025-03-26～2025-11-25，**本版明确不含**；规格给了收到旧客户端 GET / DELETE 时的 SHOULD 处理方式。
   - 规格只对**客户端**给了倾向（能支持 stdio 就支持），对 server 侧没有倾向——所以网关选型要按架构决定。
   - 架构切分理由 1 要求网关是独立进程（可观测、可重启）——stdio 的 server 通常由 client 拉起为子进程，生命周期绑在 client 上，与此冲突。
+  - 既有实现（2026-10-14 调研）：`open-webui/mcpo`（MCP-to-OpenAPI proxy，把 stdio 的 MCP server 暴露成 HTTP 端点）、`IBM/mcp-context-forge`（在任意 MCP / A2A / REST 前面暴露统一端点）、`agentgateway/agentgateway`（面向 AI agent 与 MCP 的代理）、`openziti/mcp-gateway`（上游支持 stdio 或 HTTP）、`asashiki/mcp-switch`（把本地 stdio 与远程 HTTP 的 MCP server 聚合在一个端点后面）。共同模式：**上游混合传输、下游统一端点**——与本条推荐一致。
 - 推荐：**两条边用不同传输**——对 agent 暴露 **Streamable HTTP**（独立进程、多客户端、可观测、可重启）；对 mock 用 **stdio**（作为子进程拉起，零端口、零网络配置、最容易复现）。
 - 备选：a) 两侧都用 HTTP；b) 两侧都用 stdio；c) 对 agent 也用 stdio。
 - 为什么不选 c：与「独立进程」冲突，且难观测、难重启。
@@ -275,6 +276,33 @@
 - 分页游标（ADR-0013）：透传会泄露上游分页实现（违反 opacity），且上游 token 与你的过滤参数不绑定。
 - `requestState`（ADR-0006）：网关是签发方；上游的 state 必须映射，不能直接交给 agent。
 - 反例（也是对判据的检验）：**会话标识在 2026-07-28 里根本不是协议概念**——`Mcp-Session-Id`、GET 独立流、`Last-Event-ID` 恢复都属于 2025-03-26～2025-11-25 的旧形态，本版明确不含。所以网关的「会话」是它**自己定义**的概念（绑 agent + run），不是需要重签的协议句柄。判据仍然成立：先问绑定关系，再决定重签还是自建。
+## ADR-0017 网关自建会话状态（候选，含证据链，待你决策）
+
+- 背景：2026-07-28 没有协议级会话（`Mcp-Session-Id`、GET 独立流、`Last-Event-ID` 恢复都属旧版），但网关的预算、审批、证据都要按「会话」聚合；每次请求又都是独立 POST，协议不提供跨请求绑定。
+- 证据：
+  - 规格：每个请求自带 `_meta`（含 protocolVersion / clientInfo / clientCapabilities），但没有任何会话标识；服务端主动推送走 `subscriptions/listen` 的长连接。
+  - 架构需要：预算按会话累计、审批按会话 durable wait、证据按运行打包——三者都需要一个会话键。
+  - 参考笔记的判据：不透明句柄要先问「绑定谁的哪次调用」；这里根本不存在协议句柄，所以是**自建**而非重签。
+- 推荐：网关自定义会话键（`session_id` = agent 身份 + run id），随第一条请求建立并写入证据；预算、审批、证据全部以它聚合；用 TTL 与显式关闭（CLI / admin 命令）回收；对上游不暴露这个键（上游只看到逐请求 POST）。
+- 备选：a) 不设会话，所有状态按单次请求处理；b) 借用 agent 的 run id 但不校验。
+- 为什么不选 a：预算与审批在语义上本就跨请求。
+- 为什么不选 b：可被伪造的会话键会破坏预算与证据的独立性。
+- 决策 / 为什么不选：TODO(你)
+
+## ADR-0018 版本处理策略（候选，含证据链，待你决策）
+
+- 背景：2026-07-28 把版本从「initialize 握手」改成**逐请求声明**；V1–V3 的回答里出现了「透传版本」与「加翻译层」两个倾向。
+- 证据（basic/versioning 原文，2026-10-14 核实）：
+  - **每个请求在 `_meta` 里声明自己使用的协议版本**；服务端若不实现该版本（未知，或已知但选择不支持），MUST 返回 `UnsupportedProtocolVersionError`（code -32022），`data.supported` 列出支持的版本、`data.requested` 是请求的版本。
+  - **客户端 SHOULD 从 supported 列表里选一个共同版本重试**——不匹配的处理已在协议层闭环。
+  - **服务端 MUST 实现 `server/discover`**；客户端 MAY 在发其他请求前先调用它了解支持版本（可选）。
+  - 扩展：标识必须遵循 `_meta` 键命名规则并带强制前缀；一方支持扩展而另一方不支持时，支持方 MUST 回退到核心行为或返回错误。
+  - 兼容矩阵：Modern + Modern 直接可用；版本不匹配以 `UnsupportedProtocolVersionError` 浮现，客户端用共同版本重试。
+- 推荐：**逐边协商 + 不翻译**——每一跳的 `_meta.protocolVersion` 反映该跳说话方实际实现的版本（对 agent 那一跳是网关作为 server 的版本，对 mock 那一跳是网关作为 client 的版本）；启动时用 `server/discover` 探测上游支持版本，不支持则**拒绝启动**（fail fast）；运行时不匹配就把 `-32022` 如实返回给 agent，让协议层的重试闭环生效；**不做跨版本翻译**（翻译属构造类，要 golden 测试与长期维护，违反加速决定）。
+- 备选：a) 跨版本翻译层；b) 只支持本版且不探测上游。
+- 为什么不选 a：协议层已闭环（错误 + 支持列表 + 重试），翻译层是重复实现且成本高。
+- 为什么不选 b：不探测会让不匹配到运行期才暴露；而 mock 由我们实现，启动期探测是零成本。
+- 决策 / 为什么不选：TODO(你)
 ## 参考笔记（AI 记录，非决策本身）
 
 ### 2026-10-09 为什么协议错误不适合做策略拒绝
