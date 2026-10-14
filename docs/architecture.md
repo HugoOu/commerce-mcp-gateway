@@ -61,7 +61,7 @@ flowchart TB
 | 层 | 组件 | 职责 |
 | --- | --- | --- |
 | 客户端 | agent driver（薄循环） | 以 MCP client 身份连网关，产出 tools/call |
-| 网关前门 | `frontdoor/` | MCP server 端点（Streamable HTTP + stdio）、会话管理（Mcp-Session-Id）、能力协商透传 |
+| 网关前门 | `frontdoor/` | MCP server 端点（Streamable HTTP + stdio）、能力协商透传、请求元数据头处理、长连接（`subscriptions/listen`）。注：2026-07-28 已无协议级会话（无 `Mcp-Session-Id`、无 GET 独立流、无 `Last-Event-ID` 恢复） |
 | 判定 | `policy/` | 策略加载（YAML→pydantic→内存决策结构）、求值、Decision 构造 |
 | 执行 | `enforce/` | 单一执行点（覆盖 tools/* 与 resources/*），落实 Decision；deny-by-default；唯一持有上游客户端 |
 | 预算 | `budget/` | reserve/commit/release、幂等键、TTL 回收、重启对账 |
