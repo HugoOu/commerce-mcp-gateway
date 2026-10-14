@@ -83,7 +83,9 @@
   - 既有实现（2026-10-10 调研）：
     - node9-proxy：危险动作 held for review，审批就在对话里（inline review），也可走团队审批人（dashboard / Slack）；明确 held action 在你回答前绝不执行（fail-closed）。
     - cordum：策略判定里有 `REQUIRE_APPROVAL` 这一类；且**不信任审批记录本身**——要求同一租户下已 resolved 的审批审计事件、`approval_ref` 与 `action_hash` 同时匹配，光有审批请求事件不算。
-- 推荐：默认走**协议原生**——网关自己合成 `input_required`，把 `requestState` 持久化到 SQLite（满足 durable wait），CLI 作为兜底通道；审批必须**绑定动作指纹**（参数摘要 + 策略版本）且单次使用；等待期间动作绝不执行（fail-closed）；超时默认拒绝。
+  - 规格（2026-07-28 basic/patterns/mrtr，2026-10-15 核实）：**MRTR 是本版新引入的模式，取代旧的 server-initiated requests，是破坏性变更**；`roots/list`、`sampling/createMessage`、`elicitation/create` 这类 server→client 请求 **MUST** 走 MRTR（即出现在 `input_required` 的 `inputRequests` 里）；`requestState` 是**不透明字符串**，client **MUST NOT** inspect / parse / modify 或对其内容做任何假设；MRTR 的设计目标之一是**不需要跨实例共享存储、也不需要带状态的负载均衡**。
+  - 架构影响：网关作为 server 必须支持 MRTR 才能转发/合成 server→client 请求，作为 client 必须处理上游返回的 `input_required`；`inputRequests` 是 **map**，一次响应可携带多个请求（如同时要 elicitation 与 sampling），所以 frontdoor 需要扇出/扇入。
+- 推荐：默认走**协议原生**——网关自己合成 `input_required`，**审批的暂停状态优先放进 `requestState`**（协议刻意把状态推给客户端持有），只有需要跨重启恢复的审批才落库（SQLite）并**安全绑定到会话/用户**；CLI 作为兜底通道；审批必须**绑定动作指纹**（参数摘要 + 策略版本）且单次使用；等待期间动作绝不执行（fail-closed）；超时默认拒绝。
 - 备选：a) 纯协议原生（input_required / elicitation）；b) 纯自造 CLI 通道；c) 两者并用。
 - 决策（已定，2026-10-10）：采纳推荐方案——协议原生 input_required + CLI 兜底；审批绑定动作指纹且单次使用；等待期间动作绝不执行（fail-closed）；超时默认拒绝；`requestState` 持久化到 SQLite。
 - 为什么不选 a：纯协议原生依赖客户端支持 elicitation / mrtr，通用性差。
@@ -291,6 +293,7 @@
   - 架构需要：预算按会话累计、审批按会话 durable wait、证据按运行打包——三者都需要一个会话键。
   - 参考笔记的判据：不透明句柄要先问「绑定谁的哪次调用」；这里根本不存在协议句柄，所以是**自建**而非重签。
   - 行业做法（2026-10-14 调研，12-Factor 的 Processes 章）：Twelve-factor processes are **stateless and share-nothing**；任何需要持久的数据必须放进**有状态的后备服务**（通常是数据库）；依赖「sticky sessions」（把会话缓存在进程内存里并期待后续请求落到同一进程）**是对 12-Factor 的违反，不应使用**；会话状态适合放进**带过期能力**的存储。这正好对应「进程无状态 + 会话落 SQLite + TTL 回收」。
+  - 补充（2026-10-15，mrtr 页）：MRTR 的设计目标之一是「不需要跨实例的共享存储、也不需要带状态的负载均衡」——协议刻意把暂停状态交给客户端用 `requestState` 携带。所以网关应**尽量减少自持状态**：暂停状态优先走 `requestState`，只有预算台账与证据账本这类业务状态必须落盘。elicitation 页另有 MUST：**若存储状态，必须安全地关联到具体用户**（与 `session_id` = agent + run 一致）。
 - 推荐：网关自定义会话键（`session_id` = agent 身份 + run id），随第一条请求建立并写入证据；预算、审批、证据全部以它聚合；用 TTL 与显式关闭（CLI / admin 命令）回收；对上游不暴露这个键（上游只看到逐请求 POST）。
 - 备选：a) 不设会话，所有状态按单次请求处理；b) 借用 agent 的 run id 但不校验。
 - 为什么不选 a：预算与审批在语义上本就跨请求。
@@ -320,6 +323,8 @@
   - 规格硬要求：client MUST 在授权与令牌请求里带 `resource` 参数；server MUST 校验令牌是专门发给它的；**token passthrough 被明令禁止**；令牌窃取缓解包括安全存储、短期令牌、公共客户端 refresh token 轮换；授权服务器端点 MUST 走 HTTPS。
   - 既有实现（2026-10-15 调研）：`open-webui/mcpo`、`IBM/mcp-context-forge`、`agentgateway/agentgateway` 这类前置代理都承担统一鉴权与凭证注入，并把「上游凭证来源」做成可插拔的 provider。
   - 文献（Auditable Claims）：auditable 的一个条件是「授权绑定到每个动作的参数」——意味着证据记录里必须能查到本次动作的授权依据。
+  - 规格补充（2026-10-15，elicitation 页）：**URL 模式 elicitation 是敏感信息与第三方授权的合规通道**（规格点名 auth flows 与 payment processing）；server **MUST NOT** 用 form 模式索取密码 / API key / access token / payment credential，**MUST** 用 URL 模式；并特别说明 URL 模式**不是**用来授权 MCP client 访问 server 的（那属于 MCP authorization）。→ 这给「未来如何获取上游授权」提供了一条**规格内置**的路径：用 URL 模式 elicitation 驱动第三方授权流程，不必自造跳转。
+  - elicitation 页的 MUST：若存储状态，必须安全地关联到具体用户。
 - 推荐：
   - 新增 `identity/` 模块，两个职责分开：`validate_inbound(token, request) -> AuthorizationBasis`（校验 audience 与 scope，产出授权依据）与 `CredentialProvider.for_upstream(server) -> Credential`（产出访问上游的凭证）。
   - demo 里 `CredentialProvider` 用**静态凭证**实现，接口按 RFC 8693 令牌交换预留（未来换实现即可）。
@@ -339,12 +344,35 @@
   - 规格：`tools/list` 的结果可因授权不同而不同（上游按 scope 过滤）；scope 不足时返回 403。
   - 文献（RAC）：非补偿性门——**聚合性能不能授权动作**；某一项强制门失败或状态未知，就必须停。
   - 文献（Auditable Claims）：授权必须绑定到每个动作的参数。
+  - 行业语义（2026-10-15 调研，AWS IAM 的策略评估逻辑）：**An explicit deny in either of these policies overrides the allow**——显式拒绝优先于允许，这就是 deny-overrides 语义，是 IAM 策略系统的核心规则；它与 RAC 的「非补偿性门」一致，都拒绝「用平均分抵消一次失败」。→ 支持本条的 AND 与「任一层未知即 deny」。
 - 推荐：**两层与关系（AND）**——`scope 允许 ∩ policy 允许` 才放行；任一层未知即 deny（fail-closed）；两层各自产出自己的 `reason_code`，证据里分别记录；`Decision` 增加来源标注（`decided_by: authz | policy | both`）。
 - 备选：a) 只信 scope；b) 只信 policy；c) 让 policy 覆盖 scope（policy 可放宽授权）。
 - 为什么不选 a：scope 是粗粒度，表达不了金额上限与商户白名单。
 - 为什么不选 b：忽略授权等于把令牌当装饰，T4 又失去意义。
 - 为什么不选 c：**策略永远不能放宽授权**，否则一次错误配置就能把权限放大——这与「不可信 hint 只能收紧」是同一条原则。
 - 决策 / 为什么不选：TODO(你)
+## ADR-0021 审批与敏感信息的通道选择（候选，含证据链，待你决策）
+
+- 背景：ADR-0006 定了审批走协议原生，但没定「用 form 还是 URL 模式」；而规格对敏感信息有硬性要求。
+- 证据（client/elicitation 原文，2026-10-15 核实）：
+  - 两种模式：form（内联表单，可带 JSON Schema 校验）与 url（跳转外部 URL，用于「不该经过 MCP client 的带外交互」）。
+  - **Servers MUST NOT use form mode elicitation to request sensitive information such as passwords, API keys, access tokens, or payment credentials**；涉及此类信息 **MUST** 用 URL 模式。
+  - URL 模式引入于 2025-11-25，规格注明其设计与实现**在后续版本可能变化**；URL 模式**不是**用于授权 MCP client 访问 server 的。
+  - 响应差异：form 模式的 accept 带 `content`；**URL 模式的 `content` 省略**（用户在外部页面完成）。
+- 推荐：
+  - 审批闸门里「是否同意这笔支付 / 是否批准这个动作」这类**非敏感确认**用 **form 模式**（布尔或单选即可）。
+  - 任何**敏感信息**（支付凭证、密钥、第三方授权）一律走 **URL 模式**，网关只转达 URL 与上下文，不接触内容。
+  - 判定规则落进 `approval/` 与 `sanitize/`：维护「敏感字段类别清单」，命中即强制 URL 模式。
+- 备选：a) 全部用 form 模式；b) 全部用 URL 模式。
+- 为什么不选 a：直接违反规格的两条 MUST。
+- 为什么不选 b：简单确认走外部跳转会显著增加用户摩擦，且 URL 模式的设计仍在演进。
+- 决策 / 为什么不选：TODO(你)
+
+### 2026-10-15 MRTR 把「旁路」变成了「可见数据」
+
+旧的 server-initiated requests 是带外通道；MRTR 之后，`roots/list`、`sampling/createMessage`、`elicitation/create` **MUST** 作为 `input_required` 响应里的 `inputRequests` 出现——**它们现在跑在网关本来就要解析的响应体里**。
+
+后果：早先「sampling 是网关盲点」的判断要收窄——网关现在**看得见**这些请求，因此可以选择不转发、审计或改写它们；盲点从「看不见」变成「看得见但要决定怎么办」。配套事实：`requestState` 由客户端持有且不可解析，MRTR 的设计目标之一就是不需要服务端共享存储。
 ## 参考笔记（AI 记录，非决策本身）
 
 ### 2026-10-09 为什么协议错误不适合做策略拒绝
