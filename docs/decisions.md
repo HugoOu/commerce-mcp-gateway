@@ -52,7 +52,7 @@
 - 为什么不选 b：只做包缺少跨运行单调性，整段删除不可检出。
 - 为什么不选 c：数据库事务 / WAL 只保证一致性、不保证防篡改，也不能对外携带——审计需要可交付的证据形态（CloudTrail / RFC 6962 的形态）。
 
-## ADR-0004 网关传输选择（候选，含推荐，待你决策）
+## ADR-0004 网关传输选择（已采纳，2026-10-14）
 
 - 背景：网关终结两条连接——对 agent 是 server，对 mock 是 client；两条边可以选不同传输。
 - 证据（2026-07-28 原文核实，2026-10-14）：
@@ -67,7 +67,7 @@
 - 为什么不选 c：与「独立进程」冲突，且难观测、难重启。
 - 为什么不选 a：mock 走 HTTP 需要额外端口与进程管理，对 demo 是纯成本。
 - 为什么不选 b：stdio 不便于多客户端与独立观测。
-- 决策：TODO(你)
+- 决策（已定，2026-10-14）：采纳推荐方案——对 agent 暴露 Streamable HTTP，对 mock 用 stdio。
 
 ## ADR-0005 SDK 代理能力与转发实现方式（Step 3 决定）
 
@@ -219,10 +219,11 @@
 
 - 背景：网关对协议类型分「构造 / 校验 / 透传」三类（见 `architecture.md` 第 7 节）。ADR 变更可能把某个类型从透传升级为构造（已发生一例：`resources/list`）。
 - 证据（2026-10-11 调研）：2026-07-28 通过 **SEP-2577** 批量弃用了一批接口（logging 的 RPC、roots、sampling 的 `ModelHint` / `ToolChoice`、`ToolResultContent` / `ToolUseContent`），并设了 deprecated features registry——说明协议面本身会变。若分类只存在脑子里，升级或弃用时不会触发对应的测试补齐。
+  - 行业做法（2026-10-14 调研）：这套东西在软件架构里叫 **architecture fitness function**（架构适应度函数）——`archguard/archguard`（677★，架构治理工作台，可创建 fitness function 并分析依赖）是代表实现；Python 侧的落地工具是 `seddonym/import-linter`（1218★，Lint your Python architecture），Go 侧有 `fe3dback/go-arch-lint`。共同点：**把架构规则写成 CI 可执行的门禁**，而不是文档里的约定。
 - 推荐：在代码里维护三张显式清单（`PASSTHROUGH` / `CONSTRUCTED` / `VALIDATED`），并让 CI 检查「每个构造类类型都有 golden 测试、每个校验类类型都有 negative 测试」。附带收益：可以拿清单快速核对规格的弃用清单，避免把弃用接口当推荐路径。
 - 备选：只在文档里维护分类（成本更低，但不会在 diff 里可见）。
 - 决策 / 为什么不选：TODO(你)
-## ADR-0015 评测范围与方法（候选，含证据链，待你决策）
+## ADR-0015 评测范围与方法（已采纳，2026-10-14）
 
 - 背景：作者是经济统计学本科 + 应用统计硕士，评测是最能差异化的部分；同时必须控制总工时。
 - 证据：
@@ -257,7 +258,9 @@
 - 明确不做（避免为评测而评测）：不做模型能力横评（那是 model evaluation，不是 governance evaluation；若做，只为证明控制措施与模型无关）；不复现通用 agent 安全基准的全量；不训练、不做 RL；不追求「一个分数」——文献标题就是 Trust Is Not a Score。
 - 范围上限（防蔓延）：只做一个业务族（commerce）、12–20 个对抗场景；不接真实支付、不做多租户横评。
 - 备选：a) 只做功能演示、评测留白；b) 全量模型横评（更亮眼但工时不可控）。
-- 决策 / 为什么不选：TODO(你)
+- 决策（已定，2026-10-14）：采纳推荐方案——按「声称 → 记录 → 指标」组织，含三项方法论升级（reconstructability / overclaim gap / 非补偿门对照）。
+- 为什么不选 a（只做功能演示、评测留白）：没有数字就没有可检验的声称，简历上也只剩形容词。
+- 为什么不选 b（全量模型横评）：那是 model evaluation，不是 governance evaluation，且工时不可控。
 
 ## ADR-0016 驱动（agent driver）的实现方式（候选，含证据链，待你决策）
 
@@ -266,6 +269,7 @@
   - 驱动不是学习目标，但**必须可复现**：ADR-0003 的 `replay` 与 I4 要求同一输入得到同一决策序列，因此驱动必须能被固定住（固定动作序列或固定种子）。
   - Pi 是 TypeScript，引入它会给 Python 项目增加跨语言构建链；且其上游对新贡献者默认自动关闭 issue / PR，社区门槛高。
   - mini-swe-agent 的薄循环（约 100 行）已经证明「能跑通、可读、可复现」，作者也已充分掌握该模式。
+  - 行业做法（2026-10-14 调研）：要确定性测试，通行手段是 **record & replay**——`vcr/vcr`（6080★，录制测试套件的 HTTP 交互并在后续运行中重放，用于 fast / deterministic / accurate tests）及其多语言移植（`dnaeon/go-vcr`、`php-vcr`、`node-replay`）。对本项目的意思是：驱动把「动作序列 + 上游响应」录下来重放，就能让 I4 的重放确定性可测；这也解释了为什么驱动不宜交给「下一步由模型决定」的框架。
 - 推荐：驱动自写（约 100–150 行：MCP client + 固定动作序列 + 可选 LLM 决策），复用 mini-swe-agent 的循环经验；把「用现成框架做对比」留作 future work（若要用，优先 Python 生态且能固定种子的）。
 - 备选：a) 用 Pi Harness（TS）；b) 用其他 Python agent 框架；c) 自写薄循环。
 - 决策 / 为什么不选：TODO(你)
@@ -283,6 +287,7 @@
   - 规格：每个请求自带 `_meta`（含 protocolVersion / clientInfo / clientCapabilities），但没有任何会话标识；服务端主动推送走 `subscriptions/listen` 的长连接。
   - 架构需要：预算按会话累计、审批按会话 durable wait、证据按运行打包——三者都需要一个会话键。
   - 参考笔记的判据：不透明句柄要先问「绑定谁的哪次调用」；这里根本不存在协议句柄，所以是**自建**而非重签。
+  - 行业做法（2026-10-14 调研，12-Factor 的 Processes 章）：Twelve-factor processes are **stateless and share-nothing**；任何需要持久的数据必须放进**有状态的后备服务**（通常是数据库）；依赖「sticky sessions」（把会话缓存在进程内存里并期待后续请求落到同一进程）**是对 12-Factor 的违反，不应使用**；会话状态适合放进**带过期能力**的存储。这正好对应「进程无状态 + 会话落 SQLite + TTL 回收」。
 - 推荐：网关自定义会话键（`session_id` = agent 身份 + run id），随第一条请求建立并写入证据；预算、审批、证据全部以它聚合；用 TTL 与显式关闭（CLI / admin 命令）回收；对上游不暴露这个键（上游只看到逐请求 POST）。
 - 备选：a) 不设会话，所有状态按单次请求处理；b) 借用 agent 的 run id 但不校验。
 - 为什么不选 a：预算与审批在语义上本就跨请求。
@@ -298,6 +303,7 @@
   - **服务端 MUST 实现 `server/discover`**；客户端 MAY 在发其他请求前先调用它了解支持版本（可选）。
   - 扩展：标识必须遵循 `_meta` 键命名规则并带强制前缀；一方支持扩展而另一方不支持时，支持方 MUST 回退到核心行为或返回错误。
   - 兼容矩阵：Modern + Modern 直接可用；版本不匹配以 `UnsupportedProtocolVersionError` 浮现，客户端用共同版本重试。
+  - 行业做法（2026-10-14 调研，Google AIP-185 API Versioning）：接口**必须**带主版本号并编码在 URI 路径最前面；**不得暴露 minor / patch 版本**；**新主版本不得依赖旧主版本**；不同版本必须能在一段过渡期内**同时工作**。整套规范里**没有「翻译层」这个角色**——版本是「选择与共存」，不是「互相翻译」。
 - 推荐：**逐边协商 + 不翻译**——每一跳的 `_meta.protocolVersion` 反映该跳说话方实际实现的版本（对 agent 那一跳是网关作为 server 的版本，对 mock 那一跳是网关作为 client 的版本）；启动时用 `server/discover` 探测上游支持版本，不支持则**拒绝启动**（fail fast）；运行时不匹配就把 `-32022` 如实返回给 agent，让协议层的重试闭环生效；**不做跨版本翻译**（翻译属构造类，要 golden 测试与长期维护，违反加速决定）。
 - 备选：a) 跨版本翻译层；b) 只支持本版且不探测上游。
 - 为什么不选 a：协议层已闭环（错误 + 支持列表 + 重试），翻译层是重复实现且成本高。
