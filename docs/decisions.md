@@ -312,6 +312,39 @@
 - 为什么不选 a：协议层已闭环（错误 + 支持列表 + 重试），翻译层是重复实现且成本高。
 - 为什么不选 b：不探测会让不匹配到运行期才暴露；而 mock 由我们实现，启动期探测是零成本。
 - 决策（已定，2026-10-15）：采纳推荐方案——逐边协商 + 启动时 `server/discover` 探测 + 不匹配即失败 + 不翻译。
+## ADR-0019 身份与凭证模型（候选，含证据链，待你决策）
+
+- 背景：Authorization 一节暴露出网关有两个身份职责（下游作为 resource server 校验令牌、上游作为 client 获取凭证），但架构里没有对应模块，也没有决策。
+- 证据：
+  - 规格角色：受保护的 MCP server 是 OAuth 2.1 **resource server**；MCP **client** 代表 resource owner 发起请求；**authorization server** 签发令牌（实现细节不在规格内）。
+  - 规格硬要求：client MUST 在授权与令牌请求里带 `resource` 参数；server MUST 校验令牌是专门发给它的；**token passthrough 被明令禁止**；令牌窃取缓解包括安全存储、短期令牌、公共客户端 refresh token 轮换；授权服务器端点 MUST 走 HTTPS。
+  - 既有实现（2026-10-15 调研）：`open-webui/mcpo`、`IBM/mcp-context-forge`、`agentgateway/agentgateway` 这类前置代理都承担统一鉴权与凭证注入，并把「上游凭证来源」做成可插拔的 provider。
+  - 文献（Auditable Claims）：auditable 的一个条件是「授权绑定到每个动作的参数」——意味着证据记录里必须能查到本次动作的授权依据。
+- 推荐：
+  - 新增 `identity/` 模块，两个职责分开：`validate_inbound(token, request) -> AuthorizationBasis`（校验 audience 与 scope，产出授权依据）与 `CredentialProvider.for_upstream(server) -> Credential`（产出访问上游的凭证）。
+  - demo 里 `CredentialProvider` 用**静态凭证**实现，接口按 RFC 8693 令牌交换预留（未来换实现即可）。
+  - **下游校验要真做**（解析令牌、校验 audience 与 scope），因为威胁 T4 的可测性依赖它。
+  - 凭证保管：只从环境变量 / 本地密钥文件读，不进代码库；README 标注 demo 的不安全性；上游凭证做 scope 最小化。
+  - 证据记录增加字段 `authz_basis`（本次动作的授权依据：audience 校验结果 + 命中的 scope）。
+- 备选：a) 全部 stub（不校验令牌）；b) 把身份职责并进 frontdoor 与 enforce。
+- 为什么不选 a：T4 无法被真实测试，评测里「授权绑定参数」那条声称就没有证据。
+- 为什么不选 b：两个职责（校验入站、提供出站）与 frontdoor / enforce 的关注点不同，混进去会让执行点变厚。
+- 需要的架构补充（待你认可，按 AGENTS.md）：分层职责表新增 `identity/` 一行；frontdoor 行补「令牌校验入口」；证据记录加 `authz_basis` 字段。
+- 决策 / 为什么不选：TODO(你)
+
+## ADR-0020 授权与策略的合成（候选，含证据链，待你决策）
+
+- 背景：scope 是「授权上限」（能做什么），policy 是「业务约束」（这笔钱能不能花）；两者必须合成一个 `Decision`，但合成规则未定。
+- 证据：
+  - 规格：`tools/list` 的结果可因授权不同而不同（上游按 scope 过滤）；scope 不足时返回 403。
+  - 文献（RAC）：非补偿性门——**聚合性能不能授权动作**；某一项强制门失败或状态未知，就必须停。
+  - 文献（Auditable Claims）：授权必须绑定到每个动作的参数。
+- 推荐：**两层与关系（AND）**——`scope 允许 ∩ policy 允许` 才放行；任一层未知即 deny（fail-closed）；两层各自产出自己的 `reason_code`，证据里分别记录；`Decision` 增加来源标注（`decided_by: authz | policy | both`）。
+- 备选：a) 只信 scope；b) 只信 policy；c) 让 policy 覆盖 scope（policy 可放宽授权）。
+- 为什么不选 a：scope 是粗粒度，表达不了金额上限与商户白名单。
+- 为什么不选 b：忽略授权等于把令牌当装饰，T4 又失去意义。
+- 为什么不选 c：**策略永远不能放宽授权**，否则一次错误配置就能把权限放大——这与「不可信 hint 只能收紧」是同一条原则。
+- 决策 / 为什么不选：TODO(你)
 ## 参考笔记（AI 记录，非决策本身）
 
 ### 2026-10-09 为什么协议错误不适合做策略拒绝
