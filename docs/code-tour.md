@@ -22,6 +22,15 @@
 
 ## 3. `src/gateway/budget/` —— 预算原子扣减（待填）
 
+- **读什么**：整个模块就在 `__init__.py` 里（类型与实现放一起，因为账本只做这一件事）。顺序：`SCHEMA`（表结构与那条 `UNIQUE`）→ `reserve`（条件更新与幂等）→ `commit` / `release`（终结与幂等）→ `balance` / `reclaim_expired` → 内部工具 `_transaction` / `_used_cents`。
+- **为什么这样切**：
+  - **金额以「分」入库**（整数）：浮点求和会在边界上让 `≤ limit` 假成立，而 I2 正是靠这个不等式成立的；
+  - **`BEGIN IMMEDIATE` 把「读余额 → 判断 → 写 hold」关进同一个事务**：这就是 ADR-0002 点名的在途窗口（两笔 30 元并发对 100 元上限会都看到 100 可用）；
+  - **幂等靠 `UNIQUE(session_id, tool_call_id)` 兜底**：并发重复提交也只会插入一条；
+  - **上限只能收紧**（`_upsert_session` 取 min）：与 ADR-0020「策略只能收紧」是同一条原则；
+  - **`now` 由调用方传入**：实现里不读时钟，重放才可复算（architecture 第 4 条）。
+- **自测**：① 为什么 `reserve` 失败时必须「不留下半条 hold」？② 同一幂等键重试时返回的是哪一条 hold，为什么这样设计？③ 释放过的 hold 还占额度吗？④ 50 个线程抢 100 元上限、每笔 30 元，应该有几笔成功，为什么是「恰好」而不是「最多」？⑤ 为什么重复 `commit` 要幂等，而 `commit` 之后再 `release` 要拒绝？
+
 ## 4. `src/gateway/evidence/` —— 证据链与证据包（待填）
 
 ## 5. `src/gateway/enforce.py` —— 执行点（待填，W3 Step 4）

@@ -1,7 +1,7 @@
 """四条一致性测试（测试当 oracle）：先写、先红；W3 里实现到通过。
 
-**进度**：`deny_by_default` 已随 W3 Step 1（策略）转绿；`budget` 与 `evidence` 两条仍是
-`strict=True` 的 xfail——等你把那两处核心写完，**把 xfail 标记删掉**让它们真绿，这就是
+**进度**：`deny_by_default` 已随 W3 Step 1（策略）、`budget_charges_exactly_once` 已随 Step 2
+（预算）转绿；`evidence` 一条仍是 `strict=True` 的 xfail——等证据链写完，**把 xfail 标记删掉**，这就是
 「先写测试再实现」的验收方式（AGENTS.md 的 AI Native 实践 4）。
 """
 
@@ -67,7 +67,6 @@ def test_deny_by_default(tmp_path: pathlib.Path) -> None:
     assert decision.reason_code == "policy_denied"
 
 
-@pytest.mark.xfail(reason=W3_CORE, strict=True)
 def test_budget_charges_exactly_once(tmp_path: pathlib.Path) -> None:
     """同一 (session_id, tool_call_id) 重试多次，只产生一次 commit（I2 / ADR-0002）。"""
     ledger = SqliteBudgetLedger(tmp_path / "budget.sqlite")
