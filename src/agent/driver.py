@@ -4,7 +4,11 @@
     system+task → 模型决策 →（有工具调用就）执行 MCP 工具 → 结果塞回 messages → 下一轮
 停止条件：模型不再要工具（done）、步数上限、墙钟上限、token 上限。
 
-轨迹：JSONL，每行一个事件（run_start / model_call / tool_call / run_end）。
+循环结构照 mini-swe-agent 的模式（单步 action + observation、明确上限、轨迹落盘）——
+照抄的是模式，不是依赖（ADR-0025）。
+
+轨迹：JSONL，每行一个事件（run_start / model_call / tool_call / run_end），每条 flush。
+**失败也会留下 run_end**（status=error），这样「录崩了」和「录完了」在轨迹里可区分。
 重放：`--replay run.jsonl` 默认**连模型与 mock 都不用**（模型决策与工具结果都来自记录），
 所以「模型不可用时重放仍能跑通」是天然成立的；加 `--live-tools` 可以只重放模型、真调工具。
 
@@ -129,6 +133,9 @@ async def run_task(config: RunConfig) -> int:
         tools = start_event.get("tools") or []
         routing: dict[str, tuple[Client, str]] = {}
         decisions = [decision_from_record(r["response"]) for r in replay_records if r.get("type") == "model_call"]
+        if not decisions:
+            print("[replay] 轨迹里没有 model_call 记录——上次录制多半在第一次模型调用前就失败了（看 run_end 的 error）")
+            return 2
         model: ModelClient = ReplayModel(decisions)
         recorded_tools: deque[dict[str, Any]] | None = deque(
             [r for r in replay_records if r.get("type") == "tool_call"]
@@ -143,70 +150,81 @@ async def run_task(config: RunConfig) -> int:
     tokens = 0
     steps = 0
     status = "limit"
+    error: str | None = None
 
-    async with AsyncExitStack() as stack:
-        if not pure_replay:
-            tools, routing = await connect_servers(stack, config.servers)
+    try:
+        async with AsyncExitStack() as stack:
+            if not pure_replay:
+                tools, routing = await connect_servers(stack, config.servers)
 
-        if recorder:
-            recorder.write(type="run_start", task=config.task, mandate=config.mandate,
-                           model=config.model, max_steps=config.max_steps, tools=tools)
-
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT.format(task=config.task, mandate=config.mandate)},
-        ]
-
-        for step in range(config.max_steps):
-            steps = step + 1
-            decision = await model.complete(messages, tools)
-            tokens += int((decision.usage or {}).get("total_tokens") or 0)
-            response_record = decision_to_record(decision)
-            # 摘要只覆盖「决策 + 结果」：messages 全文属于 request 侧，量大且可由前者推出
-            events.append({"type": "model_call", "step": step, "response": response_record})
             if recorder:
-                recorder.write(type="model_call", step=step,
-                               request={"messages": messages, "tools": tools}, response=response_record)
+                recorder.write(type="run_start", task=config.task, mandate=config.mandate,
+                               model=config.model, max_steps=config.max_steps, tools=tools)
 
-            if not decision.tool_calls:
-                status = "done"
-                print(f"[done] {decision.content or ''}")
-                break
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": SYSTEM_PROMPT.format(task=config.task, mandate=config.mandate)},
+            ]
 
-            messages.append(decision.raw)
-            for call in decision.tool_calls:
-                if recorded_tools is not None:
-                    recorded = recorded_tools.popleft() if recorded_tools else None
-                    if recorded is None or recorded["name"] != call.name:
-                        raise RuntimeError(f"replay mismatch: 记录里下一个工具是 {recorded and recorded['name']}，这次要调 {call.name}")
-                    result = recorded["result"]
-                else:
-                    client, real_name = routing[call.name]
-                    result = await call_tool(client, real_name, call.arguments)
-                tool_event = {"type": "tool_call", "step": step, "name": call.name,
-                              "arguments": call.arguments, "result": result}
-                events.append(tool_event)
+            for step in range(config.max_steps):
+                steps = step + 1
+                decision = await model.complete(messages, tools)
+                tokens += int((decision.usage or {}).get("total_tokens") or 0)
+                response_record = decision_to_record(decision)
+                # 摘要只覆盖「决策 + 结果」：messages 全文属于 request 侧，量大且可由前者推出
+                events.append({"type": "model_call", "step": step, "response": response_record})
                 if recorder:
-                    recorder.write(**tool_event)
-                messages.append({"role": "tool", "tool_call_id": call.id, "content": result["text"]})
-                print(f"[tool] {call.name}({json.dumps(call.arguments, ensure_ascii=False)}) -> {result['text'][:90]}")
+                    recorder.write(type="model_call", step=step,
+                                   request={"messages": messages, "tools": tools}, response=response_record)
 
-            if time.monotonic() - started > config.max_seconds:
-                status = "timeout"
-                print("[stop] 超过墙钟上限")
-                break
-            if tokens > config.max_tokens:
-                status = "token_limit"
-                print("[stop] 超过 token 上限")
-                break
-        else:
-            status = "step_limit"
-            print("[stop] 超过步数上限")
+                if not decision.tool_calls:
+                    status = "done"
+                    print(f"[done] {decision.content or ''}")
+                    break
 
-    if recorder:
-        recorder.write(type="run_end", status=status, steps=steps, tokens=tokens, digest=digest(events))
-        recorder.close()
+                messages.append(decision.raw)
+                for call in decision.tool_calls:
+                    if recorded_tools is not None:
+                        recorded = recorded_tools.popleft() if recorded_tools else None
+                        if recorded is None or recorded["name"] != call.name:
+                            raise RuntimeError(
+                                f"replay mismatch: 记录里下一个工具是 {recorded and recorded['name']}，这次要调 {call.name}"
+                            )
+                        result = recorded["result"]
+                    else:
+                        client, real_name = routing[call.name]
+                        result = await call_tool(client, real_name, call.arguments)
+                    tool_event = {"type": "tool_call", "step": step, "name": call.name,
+                                  "arguments": call.arguments, "result": result}
+                    events.append(tool_event)
+                    if recorder:
+                        recorder.write(**tool_event)
+                    messages.append({"role": "tool", "tool_call_id": call.id, "content": result["text"]})
+                    print(f"[tool] {call.name}({json.dumps(call.arguments, ensure_ascii=False)}) -> {result['text'][:90]}")
+
+                if time.monotonic() - started > config.max_seconds:
+                    status = "timeout"
+                    print("[stop] 超过墙钟上限")
+                    break
+                if tokens > config.max_tokens:
+                    status = "token_limit"
+                    print("[stop] 超过 token 上限")
+                    break
+            else:
+                status = "step_limit"
+                print("[stop] 超过步数上限")
+    except Exception as exc:
+        status = "error"
+        error = f"{type(exc).__name__}: {exc}"
+        print(f"[error] {error}")
+    finally:
+        if recorder:
+            recorder.write(type="run_end", status=status, steps=steps, tokens=tokens,
+                           digest=digest(events), error=error)
+            recorder.close()
 
     print(f"\nstatus={status} steps={steps} tokens={tokens} digest={digest(events)}")
+    if error:
+        print(f"error={error}")
     if config.record_path:
         print(f"record={config.record_path}")
     if pure_replay:

@@ -2,8 +2,8 @@
 
 用法（项目根目录）：
 
-    # 录一条轨迹（需要 OPENAI_API_KEY / OPENAI_BASE_URL）
-    uv run python scripts/run_driver.py --server merchant=src/mcp_servers/merchant.py \
+    # 录一条轨迹（需要 OPENAI_API_KEY / OPENAI_BASE_URL；OpenCode Go 还需要 x-opencode-session，见 model.py）
+    uv run python scripts/run_driver.py --server merchant=src/mcp_servers/merchant.py `
         --server psp=src/mcp_servers/psp.py --task "买一份 taco" --record runs/demo.jsonl
 
     # 重放（不需要模型、不需要网络、不需要 mock）
@@ -18,5 +18,22 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from agent.driver import main  # noqa: E402
 
+
+def leaves(exc: BaseException):
+    """把 anyio / asyncio 的 ExceptionGroup 摊平，只打真正的那条错误。"""
+    if isinstance(exc, BaseExceptionGroup):
+        for inner in exc.exceptions:
+            yield from leaves(inner)
+    else:
+        yield exc
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except BaseException as exc:
+        for leaf in leaves(exc):
+            print("[FATAL]", type(leaf).__name__, ":", leaf)
+        raise SystemExit(1)

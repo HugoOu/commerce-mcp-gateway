@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -52,6 +53,28 @@ def _loads(raw: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {"__raw_arguments": raw}
 
 
+def _extra_headers(base_url: str | None) -> dict[str, str]:
+    """额外请求头。
+
+    - `MODEL_EXTRA_HEADERS`：JSON 对象，原样透传（换 provider 时的逃生口）。
+    - `x-opencode-session`：OpenCode Go 需要这个头做路由，否则 400 `MissingSessionID`。
+      值取 `OPENCODE_SESSION_ID`，没设就按 run 生成一个 uuid4——它是路由提示，不是凭证。
+      只有 base_url 指向 opencode、或显式设了环境变量时才发，免得给别的 provider 添乱。
+    """
+    headers: dict[str, str] = {}
+    raw = os.environ.get("MODEL_EXTRA_HEADERS")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            headers.update({str(key): str(value) for key, value in parsed.items()})
+        except (json.JSONDecodeError, AttributeError) as exc:
+            raise RuntimeError(f"MODEL_EXTRA_HEADERS 不是合法 JSON 对象: {exc}") from exc
+    session = os.environ.get("OPENCODE_SESSION_ID")
+    if session or (base_url and "opencode" in base_url):
+        headers["x-opencode-session"] = session or uuid.uuid4().hex
+    return headers
+
+
 class OpenAIModel:
     """默认实现：openai SDK 打 OpenAI 兼容端点。
 
@@ -65,7 +88,8 @@ class OpenAIModel:
         key = api_key or os.environ.get("OPENAI_API_KEY")
         if not key:
             raise RuntimeError("OPENAI_API_KEY is not set")
-        self._client = AsyncOpenAI(api_key=key, base_url=base_url or os.environ.get("OPENAI_BASE_URL"))
+        resolved_base = base_url or os.environ.get("OPENAI_BASE_URL")
+        self._client = AsyncOpenAI(api_key=key, base_url=resolved_base, default_headers=_extra_headers(resolved_base))
 
     async def complete(self, messages: list[dict], tools: list[dict]) -> Decision:
         response = await self._client.chat.completions.create(
