@@ -111,9 +111,8 @@
 - 为什么不选 a：没有拦截点就没有这个项目。
 - 为什么不选 b：中间件只覆盖下游一个方向；上游凭证、净化、证据都需要自己的转发路径。
 - 为什么不选 c：跨语言构建链（Go）或功能不匹配（mcpo 面向 OpenAPI 暴露），且我们要学的是控制面本身。
-- 决策：TODO(你)
-
-- 依据：TODO(你)
+- 决策（已定，2026-10-15）：采纳推荐方案 1–7——下游用 `MCPServer` + `streamable_http_app` 挂进自己的 ASGI 应用，**拦截点用 `ServerMiddleware`**（决策逻辑仍在 `enforce/`，中间件只负责把请求交给执行点、落实 Decision、把结果交回）；上游转发自己写（`ClientSession` + `stdio_client`，ADR-0004）；凭证自持（ADR-0019）；鉴权复用 SDK 的 `token_verifier` / `AuthenticationMiddleware`；观测复用默认注册的 `OpenTelemetryMiddleware`；W2 第一个技术验证项是现代协议版（`2026-07-28`）的协商；拒绝靠中间件短路**返回** `CallToolResult(is_error=True)`，不靠抛异常。
+- 依据：本页证据一（SDK 2.3.0 公开 API 面，2026-10-15 实测）与证据二（既有实现调研）；实测细节见 `docs/w1-plan.md` Step 3 的「实测事实」表。
 
 
 ## ADR-0006 审批闸门机制（已采纳，2026-10-15 细化）
@@ -452,16 +451,22 @@
 ## ADR-0023 resources 面的拒绝形态（候选，含证据链与推荐，待你决策）
 
 - 背景：ADR-0011 把拦截面扩到 `resources/*`，ADR-0007 定了 `tools/call` 的三层形态。但 `resources/read` 的结果类型里**没有 `isError` 字段**——协议给 tools 留了「带载荷的失败」通道，没给 resources 留。所以「策略拒绝一次 resource 读取」该长什么样，是 ADR-0007 没覆盖的缺口。
-- 证据（2026-10-15 读 SDK 2.3.0 源码）：
+- 证据一：SDK 2.3.0 的错误面（2026-10-15 读源码）：
   - `mcp/server/mcpserver/exceptions.py`：`ResourceError` = 「你预料到的失败」→ 客户端收到 **`-32603`** 并带你的消息；`ResourceNotFoundError` = **`-32602`**；其他异常 = 崩溃 → 客户端只拿到「只提 URI」的通用消息。对照 `ToolError` = 「预料到的失败」→ **`isError=True` + 原文**。
-  - 规格：`resources/read` 的失败确实只有 JSON-RPC 错误一条路（`contents` 里没有失败标记位）。
+  - 规格（server/resources，2026-07-28）「Error Handling」原文：请求的资源不存在时 server **MUST** 返回 JSON-RPC 错误 **`-32602`（Invalid Params）**；内部错误 **SHOULD** 用 `-32603`；为向后兼容，client **SHOULD** 也接受 `-32002`（旧版本用的码）；并且 **MUST NOT** 对不存在的资源返回**空 `contents` 数组**——「空数组有歧义，既可能表示资源存在但没有内容，也可能表示它不存在」。
+  - 规格同页「Security Considerations」：`Servers MUST validate all resource URIs`、`Access controls SHOULD be implemented for sensitive resources`、`Resource permissions SHOULD be checked before operations`——按 URI 做访问控制是规格**点名建议**的方向。
+  - SEP-2164（`modelcontextprotocol/modelcontextprotocol#2164`）：把「资源不存在」的错误码从 `-32002` 标准化为 `-32602`，理由是向 JSON-RPC 规范对齐。
   - 后果：照搬 ADR-0007 的「策略结果不用协议错误」，resources 面就无路可走；而 ADR-0007 反对协议错误的两条理由里，「客户端库拦截、模型看不到」在 resources 上同样成立。
-- 备选：a) 拒绝即 `-32603` + 稳定 `reason_code`；b) 拒绝时回**净化后的内容**（不报错，给占位资源）；c) 拒绝时回空 `contents`；d) 在 `resources/list` 阶段就把该 URI 摘掉，`read` 只在 URI 从未出现过时才报错。
-- 推荐：**d 为主 + a 兜底**。`list` 按 URI 过滤（ADR-0013 已定），让「不存在」成为默认答案；只有对**从未在 list 里出现过的 URI** 才走到 `read` 的拒绝，此时按 SDK 与规格的既有语义回 `-32603` + 稳定 `reason_code`（理由最小化，同 ADR-0007 的硬安全层），完整理由进证据账本。
+- 证据二：`resources/list` 允许按授权变化（规格 server/resources 原文，2026-07-28）：「The set MAY vary by the authorization presented on the request — for example, returning only the resources the caller's granted scopes permit — since credentials are per-request input, not connection state.」同一段同时要求它 **MUST NOT vary per-connection or as a side effect of other requests on the connection**。→ 按授权过滤 list 是规格**明确允许**的，也再次印证 ADR-0010 的「按授权指纹分键」。
+- 证据三：同类实现的通行做法（2026-10-15 复查 README 层面）：`TBXark/mcp-proxy` 只做聚合（"aggregate tools, prompts, and resources from many servers"）；`lasso-security/mcp-gateway` 做请求/响应拦截与脱敏（"Intercepts requests and responses to sanitize sensitive information"），没有资源级授权；`IBM/mcp-context-forge` 把资源注册进统一注册表与虚拟服务器，README 未见按调用方过滤 `resources/list`；`agentgateway` 的 README 只写到 tool federation 与 CEL RBAC。→ **公开文档层面没有一个同类实现按调用方授权过滤 resources**，多数停在工具层或「聚合 / 脱敏」。诚实边界：agentgateway 的文档站是 JS 渲染，本次没取到 RBAC 正文，这条只到 README 层面。
+- 证据四：HTTP 先例（RFC 9110 §15.5.4 / §15.5.5）：403 一节写着 "An origin server that wishes to 'hide' the current existence of a forbidden target resource MAY instead respond with a status code of 404 (Not Found)"，而 404 的语义是「没找到，或**不愿披露它存在**」。→ 把「未授权」与「不存在」做成同一个答案，是 HTTP 世界早已标准化的做法。
+- 备选：a) 拒绝即 `-32602` + `"Resource not found"`（与「不存在」完全同形，理由只进账本）；b) 拒绝时回**净化后的内容**（不报错，给占位资源）；c) 拒绝时回空 `contents`；d) 在 `resources/list` 阶段就把该 URI 摘掉，`read` 只在 URI 从未出现过时才报错。
+- 推荐：**d 为主 + a 兜底，且 a 与「不存在」同形**。`list` 按调用方授权过滤（规格明确允许，游标重签见 ADR-0013），让「不存在」成为默认答案；只有对**从未在 list 里出现过的 URI** 才走到 `read` 的拒绝，形态取 `-32602` + `message: "Resource not found"` + `data.uri`，**不**带 `reason_code`——完整理由（命中哪条策略、谁的 mandate、哪个 policy 版本）只进证据账本。
   - 为什么不选 b：返回净化内容等于**假装成功**，agent 会拿占位内容继续推理；「读到了但内容是假的」比「读不到」更难审计，还会污染轨迹。
-  - 为什么不选 c：空 `contents` 是**合法成功**，agent 分不清「没有这个资源」与「被拒」，也拿不到 `reason_code`。
+  - 为什么不选 c：空 `contents` 被规格 **MUST NOT**（见证据一），而且它是**合法成功**，agent 分不清「没有这个资源」与「被拒」，也拿不到 `reason_code`。
   - 为什么不选纯 a：每次探测都产生一条拒绝，等于把 list 的枚举旁路（ADR-0011 已点出）留给对手。
-- 与 ADR-0007 的关系：不是推翻，是**补齐作用域**——三层形态继续只管 `tools/call`；resources 面新增「默认不可见（list 过滤）+ 越界读取回协议错误」这一条。
+- 与 ADR-0007 的关系：不是推翻，是**补齐作用域**——三层形态继续只管 `tools/call`；resources 面新增「默认不可见（list 过滤）+ 越界读取与不存在同形」这一条。它同时把 ADR-0007 已有的原则「能摘掉能力就不要描述约束」贯彻到底：list 里摘掉是摘掉能力，read 上与不存在同形是不给预言机。
+- 已知代价（显式记录）：不带 `reason_code` 意味着模型拿不到「这是策略拒绝」的反馈，无法自适应。接受它的依据是 resources 面**本来就没有可自适应的通道**（没有 `isError` 载荷），而带码会把「这个 URI 存在且受保护」变成可探测的预言机，与 ADR-0007 的「不成为攻击预言机」原则冲突；可用性由 list 过滤承担，不由错误消息承担。
 - 决策：TODO(你)
 - 依据：TODO(你)
 
