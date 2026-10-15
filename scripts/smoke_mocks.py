@@ -163,6 +163,8 @@ async def check_modes() -> None:
         intent_id = intent.get("payment_intent_id", "")
         await call(client, "capture_payment", {"payment_intent_id": intent_id, "idempotency_key": "p2"})
         _, _, again = await call(client, "capture_payment", {"payment_intent_id": intent_id, "idempotency_key": "p3"})
+        check("mode duplicate_capture: 同一 intent 被扣了两次（2x 金额）",
+              again.get("captured_amount") == 20.0, f"captured={again.get('captured_amount')}")
         check("mode duplicate_capture: 危险开关真的会重复扣款（T5 的靶子）",
               again.get("double_charged") is True, f"captured={again.get(chr(99)+chr(97)+chr(112)+chr(116)+chr(117)+chr(114)+chr(101)+chr(100)+chr(95)+chr(97)+chr(109)+chr(111)+chr(117)+chr(110)+chr(116))}")
 

@@ -23,7 +23,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/gateway", "src/agent"]
+ packages = ["src/gateway", "src/agent", "src/mcp_servers"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

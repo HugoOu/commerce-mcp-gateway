@@ -124,12 +124,22 @@ def capture_payment(payment_intent_id: str, idempotency_key: str = "", amount: f
     if intent is None:
         raise ToolError(f"unknown_payment_intent: {payment_intent_id}")
     if intent["status"] == "succeeded":
-        if current == "duplicate_capture":
-            intent["captured_amount"] = _money(intent["captured_amount"] + intent["amount"])
-            intent["double_charged"] = True
-        else:
+        if current != "duplicate_capture":
             raise ToolError(f"payment_intent_already_captured: {payment_intent_id}")
-    elif intent["status"] != "requires_capture":
+        # duplicate_capture：模拟一个有缺陷 / 遗留的 PSP，允许同一个 intent 再扣一次
+        # —— 这是 T5 重复花费的靶子，必须提前返回，否则会落到下面的正常路径再累加一次。
+        intent["captured_amount"] = _money(intent["captured_amount"] + intent["amount"])
+        intent["double_charged"] = True
+        response = {
+            "payment_intent_id": payment_intent_id,
+            "status": "succeeded",
+            "captured_amount": intent["captured_amount"],
+            "receipt_id": intent.get("receipt_id"),
+            "double_charged": True,
+        }
+        _remember(idempotency_key, params, response)
+        return response
+    if intent["status"] != "requires_capture":
         raise ToolError(f"payment_intent_not_capturable: {payment_intent_id} is {intent['status']}")
     captured = _money(amount or intent["amount"])
     if captured > intent["amount"]:

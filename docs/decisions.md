@@ -494,6 +494,28 @@
 - 决策（已定，2026-10-15）：采纳推荐方案——**agent 边优先现代版**（`2026-07-28`）；网关作为 server 端同时服务两代（`serve_dual_era_loop`），但对外文档、演示与评测以现代版为准；driver 用 `mode="auto"`，**不 pin 版本**；能力广告按 ADR-0012 显式设置，不依赖 SDK 默认值。（附：残留的 8000 端口进程已于 2026-10-15 清理，`Stop-Process -Id 15988`，复查监听数为 0。）
 - 依据：本页实测表（`scripts/probe_era.py`，2026-10-15）+ 源码位置（`mcp/server/connection.py:161`、`mcp/client/caching.py:341`、`mcp_types/methods.py:411`）。
 
+## ADR-0025 Step 2 驱动与模型客户端：复用现成 harness 还是自写（候选，含调研与推荐，待你决策）
+
+- 背景：Step 2 要写薄循环 driver + record&replay。你问：能不能直接套 `mini-swe-agent`，或简单改改就用，或换别的简单 harness；模型客户端能不能直接用 LiteLLM。ADR-0016 已定「自写薄循环」，所以这条 ADR 要回答的是**有没有证据支持推翻它**。
+- 证据（2026-10-15 调研 + 本地源码）：
+  - **ADR-0016 的核心理由是确定性**：驱动必须能被固定，才能让 ADR-0003 的 `replay` 与 I4 的可复算成立；多数框架把「下一步做什么」交给模型，难以固定。
+  - **mini-swe-agent v2**（`github.com/SWE-agent/mini-swe-agent`，PyPI 有包，本地也有一份学习副本）：核心 agent 类约 100 行（`src/minisweagent/agents/default.py`），但它的**工具面是 shell**（环境抽象为 local / docker / singularity / bubblewrap 等），模型层走 **LiteLLM**（`models/litellm_model.py`），轨迹是 SWE-bench 风格的 `.traj.json`。要让它调 MCP 工具，只能把 MCP 调用伪装成 shell 命令，或改它的 tool / environment 抽象——**改造成本高于自写 120 行**，还会把它的 prompt 与容器假设带进来。
+  - **它真正的价值是设计模式**：单步 action + observation、明确的上限（步数 / 成本）、轨迹落盘。这三点我们本来就打算照抄（ADR-0016 写的「复用 mini-swe-agent 的循环经验」）；今天进一步明确为「**照抄模式、不引入依赖**」。
+  - **我们比它更省事**：W2 Step 0 已验证 `mcp.client.client.Client`（`mode="auto"`）能直接连上 MCP，工具 schema 直接来自 `tools/list`；driver 的真实体量比 mini-swe-agent 还小。
+  - **LiteLLM**（`docs.litellm.ai`）：用 OpenAI 格式统一 100+ provider，另有更瘦的 `litellm-core` 发行版（官方专门提供「fewer mandatory dependencies」的版本，说明依赖面是已知代价）。我们的端点是 OpenAI 兼容（`https://opencode.ai/zen/go/v1`），**换模型就是换 model 名**，LiteLLM 的多 provider 价值现在用不上。
+  - **当前 venv 事实**：`openai` 与 `litellm` 都没装；`httpx2`（mcp 自带的 HTTP 客户端）在。所以「用 LiteLLM」= 新增一个较大的依赖，而不是复用已有件。
+- 推荐：
+  1. **保持 ADR-0016：自写薄循环**（约 120 行），循环结构照 mini-swe-agent 的模式（单步 action、步数 / 成本上限、轨迹落盘），并在代码注释与 `docs/w2-plan.md` 里注明借鉴点。
+  2. **模型客户端**：定义约 30 行的 `ModelClient` 协议（`complete(messages, tools) -> tool_call | text`），默认实现用 **`openai` SDK**（一个新增依赖，官方维护，工具调用形状现成）；**LiteLLM 作为可选后端**写在接口后面（装上就多一个实现，不进必装依赖）。
+  3. 顺手修一个不一致：`pyproject.toml` 的 wheel 包列表补上 `src/mcp_servers`（新目录此前没进打包清单）。
+- 备选：a) 直接用 `mini-swe-agent` 当库；b) 换其他 Python harness（smolagents / pydantic-ai / OpenAI Agents SDK 等）；c) 模型层用 `httpx2` 手写 chat/completions（零新依赖）；d) 现在就引入 LiteLLM。
+- 为什么不选 a：工具面是 shell、模型层绑 LiteLLM、轨迹是评测格式；改造成本高于自写，且会把它的 prompt 与容器假设带进项目。
+- 为什么不选 b：与 ADR-0016 的「为什么不选 b」同因——下一步由模型决定、难以固定，I4 的重放确定性会不可测；框架还会接管消息历史与工具 schema，trace 与 record&replay 都要和框架内部状态对齐。
+- 为什么不选 c：`httpx2` 是 mcp 自带 fork 的名字，直接依赖它比较脆；手写工具调用解析约多 40 行且容易出错，留作备选即可。
+- 为什么不选 d：现在只有一个 OpenAI 兼容端点，LiteLLM 的多 provider / 路由 / 回退都用不上，却要付出依赖面与启动时间。
+- 决策：TODO(你)
+- 依据：TODO(你)
+
 ## 参考笔记（AI 记录，非决策本身）
 
 ### 2026-10-09 为什么协议错误不适合做策略拒绝
