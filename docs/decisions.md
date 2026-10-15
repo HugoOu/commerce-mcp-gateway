@@ -472,6 +472,28 @@
 - 决策（已定，2026-10-15）：采纳推荐方案——`resources/list` 按调用方授权过滤（规格明确允许，游标重签见 ADR-0013）；对从未在 list 里出现过的 URI，`resources/read` 回 `-32602` + `"Resource not found"` + `data.uri`，**不带** `reason_code`，与「不存在」完全同形；完整理由（命中策略、mandate、policy 版本）只进证据账本；备选 b、c 与「纯 a」均不采纳。
 - 依据：本页证据一（SDK 与规格的错误面）、证据二（`resources/list` 可按授权变化）、证据三（同类实现均未做资源级过滤）、证据四（RFC 9110 的 404 先例）。
 
+## ADR-0024 agent 边的协议时代（候选，含实测证据与推荐，待你决策）
+
+- 背景：ADR-0018 定了「逐边协商 + `server/discover` + 不翻译」，但没定 **agent 边用哪个时代**。W1 的 hello 只跑通握手版（`2025-11-25`）——那是因为当时的探针用裸 `ClientSession` 直接走 initialize；W2 的 Step 0 实测发现，**时代是客户端的选择**，而三个已采纳决策都依赖现代版词汇。
+- 实测（2026-10-15，`scripts/probe_era.py`，SDK 2.3.0）：
+
+| 场景 | 协商结果 | 观察 |
+| --- | --- | --- |
+| stdio + `mode=auto` | **2026-07-28** | 现代版可达；能力广告 `list_changed=True` / `subscribe=True` |
+| stdio + `mode=2026-07-28`（pin） | 2026-07-28 | **`server_info=None`、能力全 None**——pin 跳过 `server/discover`，客户端学不到服务端身份与能力 |
+| stdio + `mode=legacy` | 2025-11-25 | 同一台 server 在握手版下广告 `list_changed=False` / `subscribe=False` |
+| Streamable HTTP + `mode=auto` | 2026-07-28 | 现代版在 HTTP 上同样可达 |
+| inproc + `mode=auto` | 2026-07-28 | 中间件依次看到 `server/discover`、`tools/list`、`tools/call`——**现代版路径同样过 `ServerMiddleware`** |
+
+- 证据（依赖现代版的既有决策）：ADR-0006 的 `input_required` + MRTR（现代版**禁止服务端发起请求**，`mcp/server/connection.py:161`）；ADR-0010 的 `ttlMs` / `cacheScope`（`mcp/client/caching.py:341` 按协商版本分叉；可缓存方法是 `prompts/list`、`resources/list`、`resources/read`、`resources/templates/list`、`server/discover`、`tools/list`）；ADR-0018 的逐请求 `_meta` 版本声明与 `server/discover`。
+- 推荐：**agent 边优先现代版**——网关作为 server 端同时服务两代（SDK 的 `serve_dual_era_loop` 已具备），但对外文档、演示与评测**以现代版为准**；我们的 driver（客户端）用 `mode="auto"`，**不要 pin 版本**。
+- 备选：a) 只做握手版；b) 只做现代版（拒绝老客户端）；c) 双代并存、以现代版为准。
+- 为什么不选 a：ADR-0006 / 0010 / 0013 全部失去载体——审批用不上 `input_required`，缓存提示无处可放，游标语义退化。
+- 为什么不选 b：会拒绝一切老客户端，演示与评测的可复现性都变差；而双代并存并不额外增加多少工作量（SDK 已内置）。
+- 附带发现（不影响决策，但要处理）：8000 端口被一个**残留的 hello-mcp HTTP 进程**占着（`[Errno 10048]`），HTTP 探针正是打到那个老实例上；W2 起网关之前先清残留进程。另外「能力广告」随时代不同（同一台 server，现代版报 `list_changed=True` / `subscribe=True`，握手版全 False）——**不要依赖 SDK 默认值**，按 ADR-0012 显式设置能力广告（尤其是 `subscribe`：不实现通知过滤就不能声明）。
+- 决策：TODO(你)
+- 依据：TODO(你)
+
 ## 参考笔记（AI 记录，非决策本身）
 
 ### 2026-10-09 为什么协议错误不适合做策略拒绝
