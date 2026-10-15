@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from contextlib import AsyncExitStack
-from typing import Any
+from typing import Self
 
 from mcp.server.mcpserver import MCPServer
 from starlette.applications import Starlette
@@ -31,7 +31,7 @@ class Gateway:
         self.app: Starlette | None = None
         self._stack: AsyncExitStack | None = None
 
-    async def __aenter__(self) -> "Gateway":
+    async def __aenter__(self) -> Self:
         self._stack = AsyncExitStack()
         await self._stack.__aenter__()
         try:
@@ -46,7 +46,7 @@ class Gateway:
             raise
         return self
 
-    async def __aexit__(self, *exc_info: Any) -> None:
+    async def __aexit__(self, *exc_info: object) -> None:
         if self._stack is not None:
             await self._stack.aclose()
         self.evidence.close()

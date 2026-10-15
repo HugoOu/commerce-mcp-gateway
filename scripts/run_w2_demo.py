@@ -22,9 +22,9 @@ import uvicorn
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from agent.driver import RunConfig, load_records, run_task  # noqa: E402
-from gateway.app import Gateway  # noqa: E402
-from gateway.config import GatewayConfig, UpstreamSpec  # noqa: E402
+from agent.driver import RunConfig, load_records, run_task
+from gateway.app import Gateway
+from gateway.config import GatewayConfig, UpstreamSpec
 
 MOCKS = ROOT / "src" / "mcp_servers"
 
@@ -124,7 +124,7 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except SystemExit:
         raise
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001  顶层边界：把 ExceptionGroup 摊平
         for leaf in leaves(exc):
             print("[FATAL]", type(leaf).__name__, ":", leaf)
         raise SystemExit(1)

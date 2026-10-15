@@ -17,7 +17,7 @@ import hashlib
 import itertools
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -93,7 +93,7 @@ def create_payment_intent(amount: float, merchant_id: str, checkout_ref: str, cu
         "checkout_ref": checkout_ref,
         "mandate_ref": mandate_ref,
         "payment_token": f"pt_{intent_id}_{checkout_ref}",
-        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(timespec="seconds"),
+        "expires_at": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(timespec="seconds"),
     }
     if current in ("decline", "insufficient_funds"):
         # 业务失败不是工具失败：Stripe 侧是「调用成功 + intent 状态为失败」

@@ -16,7 +16,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from agent.driver import main  # noqa: E402
+from agent.driver import main
 
 
 def leaves(exc: BaseException):
@@ -33,7 +33,7 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except SystemExit:
         raise
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001  顶层边界：把 ExceptionGroup 摊平
         for leaf in leaves(exc):
             print("[FATAL]", type(leaf).__name__, ":", leaf)
         raise SystemExit(1)

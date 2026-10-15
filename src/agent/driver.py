@@ -33,9 +33,21 @@ from mcp.client.client import Client
 from mcp.client.stdio import StdioServerParameters
 
 try:  # 既能当包导入，也能直接当脚本跑
-    from .model import Decision, ModelClient, OpenAIModel, ReplayModel, decision_from_record, decision_to_record
+    from .model import (
+        ModelClient,
+        OpenAIModel,
+        ReplayModel,
+        decision_from_record,
+        decision_to_record,
+    )
 except ImportError:  # pragma: no cover
-    from model import Decision, ModelClient, OpenAIModel, ReplayModel, decision_from_record, decision_to_record
+    from model import (
+        ModelClient,
+        OpenAIModel,
+        ReplayModel,
+        decision_from_record,
+        decision_to_record,
+    )
 
 SYSTEM_PROMPT = """你是一个购物 agent，通过 MCP 工具完成一次购买。
 
@@ -226,7 +238,7 @@ async def run_task(config: RunConfig) -> int:
             else:
                 status = "step_limit"
                 print("[stop] 超过步数上限")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  失败也要留下 run_end，然后交给上层
         status = "error"
         error = f"{type(exc).__name__}: {exc}"
         print(f"[error] {error}")

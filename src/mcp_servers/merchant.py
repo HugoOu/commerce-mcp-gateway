@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import itertools
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -103,7 +103,7 @@ def create_checkout(sku: str, quantity: int = 1, fulfillment_option: str = "stan
         ],
         "fulfillment_option": fulfillment_option,
         "totals": _totals(item["price"] * quantity),
-        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(timespec="seconds"),
+        "expires_at": (datetime.now(UTC) + timedelta(minutes=15)).isoformat(timespec="seconds"),
         "messages": _messages(),
     }
     CHECKOUTS[checkout_id] = state
@@ -177,7 +177,7 @@ def complete_checkout(checkout_id: str, payment_token: str, mandate_ref: str = "
         "receipt": {
             "amount": state["totals"]["total"],
             "currency": state["currency"],
-            "paid_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "paid_at": datetime.now(UTC).isoformat(timespec="seconds"),
             "mandate_ref": mandate_ref,
         },
     }

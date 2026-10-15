@@ -191,7 +191,7 @@ async def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(asyncio.run(main()))
-    except BaseException as exc:  # pragma: no cover
+    except BaseException as exc:  # noqa: BLE001  # pragma: no cover
         for leaf in leaves(exc):
             print("[FATAL]", type(leaf).__name__, ":", leaf)
         raise SystemExit(1)
