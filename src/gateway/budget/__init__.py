@@ -270,7 +270,11 @@ class SqliteBudgetLedger:
         self._conn.execute("COMMIT")
 
     def _upsert_session(self, session_id: str, limit_cents: int, currency: str) -> None:
-        """记录会话的上限与币种。上限**只能收紧**（取 min），与 ADR-0020 同一条原则。"""
+        """记录会话的上限与币种。上限**只能收紧**（取 min），与 ADR-0020 同一条原则。
+
+        收紧发生在当前事务里，所以**被拒的那次 reserve 不会留下收紧**（事务整体回滚）。
+        这是刻意的：否则任何调用方传一个极小的 limit 就能把会话额度锁死（一次廉价的 DoS）。
+        """
         row = self._conn.execute(
             "SELECT limit_cents, currency FROM sessions WHERE session_id=?", (session_id,)
         ).fetchone()

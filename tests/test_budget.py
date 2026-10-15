@@ -79,12 +79,22 @@ def test_over_limit_is_rejected_without_leaving_a_hold(tmp_path: pathlib.Path) -
 
 
 def test_limit_can_only_tighten(tmp_path: pathlib.Path) -> None:
-    """上限取 min：先用 100，再用 50，生效上限就是 50（ADR-0020 同一条原则）。"""
+    """上限取 min：成功的那次可以把上限收紧，**被拒的那次不会**，而且永远不能放宽。
+
+    「被拒不会收紧」是刻意的：收紧发生在同一次事务里，被拒时整个事务回滚。否则任何调用方
+    传一个极小的 limit 就能把会话额度锁死——那是一次廉价的 DoS。
+    """
     ledger = _ledger(tmp_path)
     _reserve(ledger, tool_call_id="t1", amount=30.0, limit=100.0)
     with pytest.raises(BudgetExceeded):
         _reserve(ledger, tool_call_id="t2", amount=40.0, limit=50.0)
-    assert ledger.balance("s1").remaining == 20.0
+    assert ledger.balance("s1").remaining == 70.0  # 上限仍是 100：那次收紧被回滚了
+
+    _reserve(ledger, tool_call_id="t3", amount=10.0, limit=50.0)  # 装得下 → 成功并收紧
+    assert ledger.balance("s1").remaining == 10.0  # 50 - 30 - 10
+
+    _reserve(ledger, tool_call_id="t4", amount=5.0, limit=200.0)  # 更大的上限不能放宽
+    assert ledger.balance("s1").remaining == 5.0  # 仍是 50 的上限：50 - 30 - 10 - 5
 
 
 def test_release_frees_budget(tmp_path: pathlib.Path) -> None:
