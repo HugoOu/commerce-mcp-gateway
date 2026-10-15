@@ -105,7 +105,8 @@ async def main_async(args: argparse.Namespace) -> int:
         finally:
             server.should_exit = True
             await serving
-    print_trace(config.evidence_dir / "chain.jsonl")
+    # 只打**这次运行**的证据包（全局链会混进历史运行，读起来很吵）
+    print_trace(config.evidence_dir / "runs" / f"{config.run_id}.jsonl")
     return code
 
 
