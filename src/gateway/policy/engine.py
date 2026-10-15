@@ -99,11 +99,17 @@ def _arg_matches(matcher: ArgMatcher, value: Any) -> bool:
         number = _number(value)
         if number is None or number < matcher.min:
             return False
-    if matcher.glob is not None and (
-        not isinstance(value, str) or not fnmatch.fnmatchcase(value, matcher.glob)
-    ):
-        return False
-    return True
+    return _glob_matches(matcher.glob, value)
+
+
+def _glob_matches(pattern: str | None, value: Any) -> bool:
+    """参数上的 glob 是**普通通配**（不按 `__` 分段）——分段语义只用于工具名与 URI。
+
+    `pattern is None` 表示这条规则没提这个要求，因此返回 True。
+    """
+    if pattern is None:
+        return True
+    return isinstance(value, str) and fnmatch.fnmatchcase(value, pattern)
 
 
 def _matches(match: Match, request: InterceptedRequest) -> bool:
