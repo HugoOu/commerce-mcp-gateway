@@ -13,11 +13,14 @@ import pathlib
 import socket
 import sys
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 import uvicorn
 from mcp.client.client import Client
 from mcp.shared.exceptions import MCPError
+
+import mcp_types as types
 
 from gateway.app import Gateway
 from gateway.config import GatewayConfig, UpstreamSpec
@@ -83,6 +86,53 @@ async def running_gateway(tmp_path: pathlib.Path, psp_mode: str = "none") -> Asy
 def _chain(gateway: Gateway) -> list[dict]:
     text = (gateway.config.evidence_dir / "chain.jsonl").read_text(encoding="utf-8")
     return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def _lines(path: pathlib.Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+async def _approve(*args: Any, **kwargs: Any) -> types.ElicitResult:
+    return types.ElicitResult(action="accept", content={"approve": True})
+
+
+async def _decline(*args: Any, **kwargs: Any) -> types.ElicitResult:
+    return types.ElicitResult(action="decline")
+
+
+async def test_approval_channel_approves_then_continues(tmp_path: pathlib.Path) -> None:
+    """协议通道（MRTR，ADR-0006）：第一轮返回 `input_required`，第二轮用客户端的回答判。"""
+    approvals = tmp_path / "approvals.jsonl"
+    async with running_gateway(tmp_path) as (gateway, url):
+        async with Client(server=url, mode="auto", elicitation_callback=_approve) as client:
+            result = await client.call_tool(
+                "merchant__request_refund", {"order_id": "ord_missing", "reason": "test"}
+            )
+
+    is_error, text = _payload(result)
+    # 批准之后继续走链：上游说没有这个订单，所以是「工具失败」而不是「策略拒绝」
+    assert is_error
+    assert "approval" not in text.lower()
+    assert "unknown_order" in text or "Error executing" in text
+    assert "require_approval" in {row["decision"] for row in _chain(gateway)}
+    pending = [row for row in _lines(approvals) if row["kind"] == "pending"]
+    assert len(pending) == 1 and pending[0]["subject"] == "agent-dev"
+    assert pending[0]["action_digest"]  # 批准绑定到具体动作（ADR-0021）
+
+
+async def test_approval_decline_is_a_deny(tmp_path: pathlib.Path) -> None:
+    """拒绝就是拒绝：`decline` → `approval_denied`（fail-closed）。"""
+    async with running_gateway(tmp_path) as (gateway, url):
+        async with Client(server=url, mode="auto", elicitation_callback=_decline) as client:
+            result = await client.call_tool(
+                "merchant__request_refund", {"order_id": "ord_missing", "reason": "test"}
+            )
+
+    is_error, text = _payload(result)
+    assert is_error
+    assert "approval_denied" in text
+
 
 
 def _payload(result) -> tuple[bool, str]:

@@ -61,6 +61,8 @@ class GatewayMiddleware(ServerMiddleware[Any]):
                 dict(params.get("arguments") or {}),
                 basis=basis,
                 request_id=ctx.request_id,
+                # MRTR 的回答与 `_meta` **平级**（实测），所以从 `params` 取，不从 `ctx.meta` 取
+                input_responses=(ctx.params or {}).get("inputResponses"),
             )
         if method == "resources/read":
             params = ctx.params or {}

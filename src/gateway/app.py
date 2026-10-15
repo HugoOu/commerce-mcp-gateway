@@ -12,7 +12,7 @@ from typing import Self
 from mcp.server.mcpserver import MCPServer
 from starlette.applications import Starlette
 
-from .approval import FileApprovalGate
+from .approval import DurableApprovalGate
 from .budget import SqliteBudgetLedger
 from .config import GatewayConfig
 from .enforce import Enforcer
@@ -37,7 +37,7 @@ class Gateway:
             mandate=load_mandate(config.mandate_path) if config.mandate_path else None,
         )
         self.sanitizer = Sanitizer(enabled=config.sanitize)
-        self.approval = FileApprovalGate(config.approvals_path, timeout_seconds=config.approval_timeout_seconds)
+        self.approval = DurableApprovalGate(config.approvals_path, timeout_seconds=config.approval_timeout_seconds)
         self.registry = UpstreamRegistry(config.upstreams)
         self.enforcer = Enforcer(
             registry=self.registry,

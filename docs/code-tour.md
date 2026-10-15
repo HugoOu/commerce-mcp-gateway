@@ -44,6 +44,15 @@
 
 ## 5. `src/gateway/enforce.py` —— 执行点（待填，W3 Step 4）
 
+- **读什么**：模块 docstring 里的链路（`authorize → decide → enforce → record_pending → forward → sanitize → settle → record_done`）→ `call_tool`（把链路按顺序读一遍，每一步都有注释）→ `_deny`（ADR-0007 的三层形态）→ `_reserve` / `_used`（预算）→ `_record`（证据字段从哪来）→ `read_resource`（ADR-0023 的同形拒绝）。
+- **为什么这样切**：
+  - **决策只在这一处**：前门与中间件一行决策逻辑都没有（ADR-0005 的分工），所以「这次调用为什么被放行/拒绝」永远只有一个答案来源；
+  - **`record_pending` 在转发之前**（ADR-0022）：崩溃也一定留下「有一条 Decision 授权过它」；
+  - **拒绝是「返回结果」不是「抛异常」**（ADR-0007 第 2 层）：抛异常会变成协议错误，客户端库可能直接掐掉整个回合——那是一次廉价的 DoS；
+  - **`_reserve` 在有金额时才动手**，且没有 mandate 就直接拒（fail-closed），而不是「没约束就放行」；
+  - **审批第一轮返回 `InputRequiredResult`**（MRTR），第二轮从 `input_responses` 读回答——重试会重跑整条链，但 `tool_call_id` 是内容摘要派生的，`reserve` 命中同一个 hold，不会重复占额度。
+- **自测**：① 为什么未知工具是**协议错误**而策略拒绝不是？② `decision=allow` 与 `outcome=tool_error` 为什么能同时出现？③ 被拒的调用为什么要在链上留痕？④ 审批重试那一轮为什么不会重复扣款？⑤ `read_resource` 为什么对「越界」和「不存在」回同一个答案？
+
 ## 6. `src/gateway/frontdoor.py` + `upstream.py` —— 前后门（待填）
 
 > 每填一节，都要有「读什么 / 为什么这样切 / 自测」三块，与上面两节保持同一格式。

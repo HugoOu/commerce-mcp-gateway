@@ -25,7 +25,7 @@ from mcp.shared.exceptions import MCPError
 from mcp_types import INVALID_PARAMS, INVALID_REQUEST
 
 from . import telemetry
-from .approval import ApprovalGate
+from .approval import APPROVAL_KEY, DurableApprovalGate
 from .budget import BudgetExceeded, BudgetLedger, Hold
 from .decision import AuthorizationBasis, Decision, InterceptedRequest
 from .evidence import ChainLedger, EvidenceEntry
@@ -73,7 +73,7 @@ class Enforcer:
         budget: BudgetLedger,
         identity: IdentityResolver,
         sanitizer: Sanitizer,
-        approval: ApprovalGate,
+        approval: DurableApprovalGate,
         run_id: str,
         list_ttl_ms: int = 30_000,
         hold_ttl_seconds: float = 120.0,
@@ -148,8 +148,10 @@ class Enforcer:
         *,
         basis: AuthorizationBasis,
         request_id: str | int | None = None,
+        input_responses: dict[str, Any] | None = None,
         now: float | None = None,
-    ) -> types.CallToolResult:
+    ) -> types.CallToolResult | types.InputRequiredResult:
+        """返回 `CallToolResult`；需要人工审批时返回 `InputRequiredResult`（MRTR，ADR-0006）。"""
         moment = time.time() if now is None else now
         seq = next(self._seq)
         request = self._request("tools/call", name, arguments, basis, request_id, moment)
@@ -157,7 +159,16 @@ class Enforcer:
         # ① 判定（含审批闸门）——拒绝在这里就返回，不碰上游、不碰预算
         decision = self._policy.evaluate(request, basis)
         if decision.kind == "require_approval":
-            decision = await self._approval.request(request, decision, basis)
+            answer = (input_responses or {}).get(APPROVAL_KEY)
+            if answer is None:
+                # 第一轮：落 durable 待审批记录（ADR-0006），把问题交给客户端
+                pending = self._approval.register(request, decision, basis)
+                self._record(request, "pending", seq=seq, decision="require_approval",
+                             reason_code=decision.reason_code, policy_digest=self._policy.digest)
+                telemetry.annotate(request.method, tool=request.name, decision="require_approval",
+                                   outcome="challenged")
+                return self._approval.challenge(pending, request)
+            decision = self._approval.interpret(answer)
         if decision.kind != "allow":
             return self._deny(request, decision, seq=seq)
 

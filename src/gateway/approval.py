@@ -6,9 +6,12 @@
 2. **绑定身份与动作**（ADR-0021）：每条待审批都带 `subject` 与 `action_digest`，
    批准只对**那一个动作**有效——不做全局「批准」开关。
 
-W3 先做 **CLI 兜底**通道：待审批写进 `runs/approvals.jsonl`，闸门轮询同一个文件等决定；
-超时即拒绝（`approval_timeout`）。MCP 原生的 `input_required` 通道要等 MRTR 验证过了再接
-（见 `docs/w3-plan.md` 的风险条）——两条通道共用同一个 `ApprovalGate` 接口。
+两条通道，同一个闸门：
+
+- **协议通道（主）**：网关返回 `input_required`，客户端把回答带回 `params["inputResponses"]`；
+  形状是实测出来的，见 `docs/w3-plan.md` 的「Step 4 的 MRTR 验证」小节。
+- **文件 / CLI 通道（兜底）**：`scripts/approve.py` 往同一个 JSONL 追加决定，闸门轮询它；
+  客户端不支持 elicitation 时用这条，超时即拒绝（`approval_timeout`）。
 """
 
 from __future__ import annotations
@@ -21,10 +24,15 @@ import uuid
 from dataclasses import asdict, dataclass
 from typing import Protocol
 
+import mcp_types as types
+
 from .decision import AuthorizationBasis, Decision, InterceptedRequest
 from .hashing import digest
 
-__all__ = ["ApprovalGate", "DenyAllGate", "FileApprovalGate", "PendingApproval"]
+__all__ = ["APPROVAL_KEY", "ApprovalGate", "DenyAllGate", "DurableApprovalGate", "PendingApproval"]
+
+APPROVAL_KEY = "approve"
+"""挑战与回答共用的键：网关用它在 `inputRequests` 里提问，也从 `inputResponses` 里取回答。"""
 
 
 @dataclass(frozen=True)
@@ -52,8 +60,8 @@ class DenyAllGate:
         return Decision(kind="deny", reason_code="approval_unavailable")
 
 
-class FileApprovalGate:
-    """文件通道的审批闸门：`pending` 与 `decision` 两类记录写同一个 JSONL。
+class DurableApprovalGate:
+    """durable 审批闸门：`pending` 与 `decision` 两类记录写同一个 JSONL（ADR-0006 的 durable wait）。
 
     `scripts/approve.py` 负责把决定追加进去——这就是 ADR-0006 说的 CLI 投递通道。
     """
@@ -64,6 +72,53 @@ class FileApprovalGate:
         self.poll_seconds = poll_seconds
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
+
+    # ------------------------------------------------------------------ 协议通道（主）
+
+    def register(
+        self, request: InterceptedRequest, decision: Decision, basis: AuthorizationBasis
+    ) -> PendingApproval:
+        """落一条 durable 待审批记录。绑定身份与动作（ADR-0021）：批准只对**那一个动作**有效。"""
+        pending = PendingApproval(
+            approval_id=f"apr_{uuid.uuid4().hex[:10]}",
+            subject=basis.subject,
+            action=f"{request.method} {request.name or ''}".strip(),
+            action_digest=digest({"method": request.method, "name": request.name, "arguments": request.arguments}),
+            reason_code=decision.reason_code,
+            created_at=round(time.time(), 3),
+        )
+        self._append({"kind": "pending", **asdict(pending)})
+        print(
+            f"[approval] 待审批 {pending.approval_id}：{pending.action}（{pending.reason_code}）——"
+            f"`uv run python scripts/approve.py list` 查看，`approve {pending.approval_id}` 批准"
+        )
+        return pending
+
+    def challenge(self, pending: PendingApproval, request: InterceptedRequest) -> types.InputRequiredResult:
+        """把问题交给客户端。`request_state` 承载 `approval_id`——它是客户端回传的不透明句柄。"""
+        return types.InputRequiredResult(
+            input_requests={
+                APPROVAL_KEY: types.ElicitRequest(
+                    params=types.ElicitRequestFormParams(
+                        message=f"批准这次调用吗？{pending.action}（{pending.reason_code}）",
+                        requested_schema={
+                            "type": "object",
+                            "properties": {"approve": {"type": "boolean"}},
+                            "required": ["approve"],
+                        },
+                    )
+                )
+            },
+            request_state=pending.approval_id,
+        )
+
+    def interpret(self, answer: dict) -> Decision:
+        """读客户端的回答：`accept` 且 `approve=True` 才放行，其余一律拒（fail-closed）。"""
+        if answer.get("action") == "accept" and (answer.get("content") or {}).get("approve") is True:
+            return Decision(kind="allow")
+        return Decision(kind="deny", reason_code="approval_denied")
+
+    # ------------------------------------------------------------------ 文件 / CLI 通道（兜底）
 
     def pending(self) -> list[PendingApproval]:
         """还没被决定的待审批（`scripts/approve.py list` 用它）。"""
