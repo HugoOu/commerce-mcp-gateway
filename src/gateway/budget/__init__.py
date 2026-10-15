@@ -137,9 +137,16 @@ class SqliteBudgetLedger:
         # 而所有访问都经过下面那把 `self._lock`——线程安全由锁保证，不靠 sqlite 的连接归属。
         self._conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        with self._lock, self._transaction():
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            # 建表**不能**套在 `_transaction()` 里：`executescript` 自己会先隐式 COMMIT，
+            # 于是后面的 COMMIT 会撞上 "cannot commit - no transaction is active"。
+            # 建表语句都是 `IF NOT EXISTS`，幂等，直接跑即可。
             self._conn.executescript(SCHEMA)
+        except BaseException:
+            # 构造失败也要放掉文件句柄：Windows 上句柄没放，连库文件都删不掉
+            self._conn.close()
+            raise
 
     def reserve(
         self,
