@@ -88,6 +88,9 @@
 | 错误形状 | 工具抛异常 → `isError=True` + `resultType=complete`；异常消息**不进**载荷 | 验证 ADR-0007；可操作的拒绝理由必须自己构造 |
 | 结构化输出 | 默认不填 `structuredContent`（结果是文本 JSON）；需 `@mcp.tool(structured_output=True)` | `sanitize/` 要同时覆盖两种形态 |
 | 字段命名 | SDK 用 snake_case（`is_error` / `structured_content` / `result_type`），线上别名 camelCase | 打印与比较用 `model_dump(by_alias=True)` |
+| 中间件短路（2026-10-15） | `ServerMiddleware` 不调 `call_next` 直接返回 `BaseModel`/`dict` → **自己拥有结果**（`_dump_result` 只做 `by_alias` 序列化，管线不再修补）；抛 `MCPError`（或返回 `ErrorData`）→ 协议错误 | 拒绝要**返回** `CallToolResult(is_error=True)`，不能靠抛异常 |
+| 工具层错误分层（2026-10-15） | `ToolError`（可预期，含未知工具名与参数校验失败）→ `isError=True` + 原文进 `content`；`UnexpectedToolError`（崩溃）→ `isError=True` 但只给 `Error executing tool <name>`；`MCPError` → 协议错误 | SDK 自己的分层与 ADR-0007 同构；我们的 deny 走第一条 |
+| resources 错误面（2026-10-15） | 没有 `isError` 通道：`ResourceError` → `-32603` 带原文（`ResourceNotFoundError` → `-32602`）；其他异常 → 只给通用消息 | resources 的拒绝形态是 ADR-0007 未覆盖的缺口 → ADR-0023（候选） |
 
 - 证据二：既有实现的通行做法（2026-10-15 调研）
   - `TBXark/mcp-proxy`（Go）：**单个 HTTP 入口聚合多个 MCP server**；上游支持 `stdio` / `sse` / `streamable-http` 三种客户端类型；并且**由代理持有并刷新下游 OAuth 令牌**（authorize once, hold and refresh for every caller）。
@@ -102,6 +105,7 @@
   4. **鉴权**优先复用 SDK 的 `token_verifier` 与 `AuthenticationMiddleware`，`identity/` 在其上产出 `AuthorizationBasis` 与 `authz_basis`。
   5. **观测**复用默认注册的 `OpenTelemetryMiddleware`，`telemetry/` 只做属性映射与补充。
   6. **W2 第一个技术验证项**：确认现代协议版（`2026-07-28`）能否协商成功——它决定 ADR-0006 的 `input_required` 合成能否照设计落地；若不可达，按 AGENTS.md 的「实现期规则」停下来提 ADR。
+  7. **拒绝的落地方式**：在 `ServerMiddleware` 里短路**返回** `CallToolResult(is_error=True)`（可自适应层与硬安全层，见 ADR-0007）或抛 `MCPError`（结构性层）；崩溃类失败照 SDK 的 `UnexpectedToolError` 语义只给通用消息，原文进日志与证据账本。
 
 - 备选：a) 只用 SDK 的 server、不做拦截；b) 纯中间件实现（不自己写转发）；c) 引入现成代理（Go 的 mcp-proxy 或 Python 的 mcpo）。
 - 为什么不选 a：没有拦截点就没有这个项目。
@@ -444,6 +448,23 @@
 - 为什么不选 a：通用代理是已有成熟实现的赛道（AGPL 生态里有多个），且与你的差异化（可复算证据、预算、审批）无关。
 - 为什么不选 b：放弃证据与审批等于放弃你唯一的不可替代性——那是模型与框架都拿不走的部分。
 - 决策（已定，2026-10-15）：采纳推荐方案——定位锁为「面向 agentic commerce / pay 的受控执行与验证控制面」；按借鉴清单执行（借鉴短路拒绝、audit-first 顺序、自陈局限、三层防御；不借鉴 Lens 广度、上下文预注入、关键词 SQL 守卫、短生命周期 stdio）；并采纳架构补充（证据拆成 `record_pending` / `record_done`，见 `architecture.md`）。
+
+## ADR-0023 resources 面的拒绝形态（候选，含证据链与推荐，待你决策）
+
+- 背景：ADR-0011 把拦截面扩到 `resources/*`，ADR-0007 定了 `tools/call` 的三层形态。但 `resources/read` 的结果类型里**没有 `isError` 字段**——协议给 tools 留了「带载荷的失败」通道，没给 resources 留。所以「策略拒绝一次 resource 读取」该长什么样，是 ADR-0007 没覆盖的缺口。
+- 证据（2026-10-15 读 SDK 2.3.0 源码）：
+  - `mcp/server/mcpserver/exceptions.py`：`ResourceError` = 「你预料到的失败」→ 客户端收到 **`-32603`** 并带你的消息；`ResourceNotFoundError` = **`-32602`**；其他异常 = 崩溃 → 客户端只拿到「只提 URI」的通用消息。对照 `ToolError` = 「预料到的失败」→ **`isError=True` + 原文**。
+  - 规格：`resources/read` 的失败确实只有 JSON-RPC 错误一条路（`contents` 里没有失败标记位）。
+  - 后果：照搬 ADR-0007 的「策略结果不用协议错误」，resources 面就无路可走；而 ADR-0007 反对协议错误的两条理由里，「客户端库拦截、模型看不到」在 resources 上同样成立。
+- 备选：a) 拒绝即 `-32603` + 稳定 `reason_code`；b) 拒绝时回**净化后的内容**（不报错，给占位资源）；c) 拒绝时回空 `contents`；d) 在 `resources/list` 阶段就把该 URI 摘掉，`read` 只在 URI 从未出现过时才报错。
+- 推荐：**d 为主 + a 兜底**。`list` 按 URI 过滤（ADR-0013 已定），让「不存在」成为默认答案；只有对**从未在 list 里出现过的 URI** 才走到 `read` 的拒绝，此时按 SDK 与规格的既有语义回 `-32603` + 稳定 `reason_code`（理由最小化，同 ADR-0007 的硬安全层），完整理由进证据账本。
+  - 为什么不选 b：返回净化内容等于**假装成功**，agent 会拿占位内容继续推理；「读到了但内容是假的」比「读不到」更难审计，还会污染轨迹。
+  - 为什么不选 c：空 `contents` 是**合法成功**，agent 分不清「没有这个资源」与「被拒」，也拿不到 `reason_code`。
+  - 为什么不选纯 a：每次探测都产生一条拒绝，等于把 list 的枚举旁路（ADR-0011 已点出）留给对手。
+- 与 ADR-0007 的关系：不是推翻，是**补齐作用域**——三层形态继续只管 `tools/call`；resources 面新增「默认不可见（list 过滤）+ 越界读取回协议错误」这一条。
+- 决策：TODO(你)
+- 依据：TODO(你)
+
 ## 参考笔记（AI 记录，非决策本身）
 
 ### 2026-10-09 为什么协议错误不适合做策略拒绝
