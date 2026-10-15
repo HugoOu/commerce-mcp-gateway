@@ -15,8 +15,8 @@ import sys
 from collections.abc import AsyncIterator
 from typing import Any
 
-import pytest
 import mcp_types as types
+import pytest
 import uvicorn
 from mcp.client.client import Client
 from mcp.shared.exceptions import MCPError
