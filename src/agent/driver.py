@@ -65,12 +65,16 @@ class RunConfig:
 
 
 class RunRecorder:
-    """JSONL 轨迹写入器：每条事件立刻 flush，崩溃也不丢前面的事件。"""
+    """JSONL 轨迹写入器：**一个文件 = 一次运行**（重开就覆盖），每条事件立刻 flush。
+
+    覆盖而不是追加是刻意的：追加会让「上次录崩的半条轨迹」混进新轨迹，重放时读到的
+    是坏的 run_start。要留旧轨迹就换个文件名。
+    """
 
     def __init__(self, path: pathlib.Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
-        self._fh = path.open("a", encoding="utf-8")
+        self._fh = path.open("w", encoding="utf-8")
 
     def write(self, **event: Any) -> None:
         self._fh.write(json.dumps({"ts": round(time.time(), 3), **event}, ensure_ascii=False) + "\n")
