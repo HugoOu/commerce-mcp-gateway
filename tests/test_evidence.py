@@ -68,7 +68,7 @@ def test_verify_passes_on_untampered_run(tmp_path: pathlib.Path) -> None:
 
 
 def test_verify_detects_tampering(tmp_path: pathlib.Path) -> None:
-    """I3：翻转一条记录的字段，verify 必须失败并指出位置。"""
+    """I3：翻转**运行包里**一条记录的字段，包级校验必须失败并指出位置。"""
     ledger = _ledger(tmp_path)
     _seed(ledger)
     _rewrite(ledger.path / "runs" / "r1.jsonl", lambda rows: rows[0].update({"decision": "deny"}))
@@ -77,7 +77,19 @@ def test_verify_detects_tampering(tmp_path: pathlib.Path) -> None:
     assert not report.ok
     assert report.broken_at == 0
     assert "entry_hash" in report.detail
-    assert not ledger.verify().ok  # 链上同一条也被改动了（两处写的是同一行）
+    # 链**没**被动过：链级校验仍然通过。链才是权威，包只是它的一个投影。
+    assert ledger.verify().ok
+
+
+def test_verify_detects_chain_tampering(tmp_path: pathlib.Path) -> None:
+    """改链上那一条：链级校验失败，并指出位置。"""
+    ledger = _ledger(tmp_path)
+    _seed(ledger)
+    _rewrite(ledger.path / "chain.jsonl", lambda rows: rows[0].update({"decision": "deny"}))
+
+    report = ledger.verify()
+    assert not report.ok
+    assert report.broken_at == 0
 
 
 def test_verify_detects_package_truncation(tmp_path: pathlib.Path) -> None:
