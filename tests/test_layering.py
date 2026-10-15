@@ -45,7 +45,11 @@ def test_gateway_modules_import():
     """冒烟：网关各模块能被 import（抓拼写与导入错误，不需要网络）。"""
     for name in (
         "gateway.config",
+        "gateway.decision",
         "gateway.evidence",
+        "gateway.policy",
+        "gateway.budget",
+        "gateway.classification",
         "gateway.telemetry",
         "gateway.upstream",
         "gateway.enforce",
