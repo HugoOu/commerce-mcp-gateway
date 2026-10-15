@@ -99,9 +99,10 @@ def _arg_matches(matcher: ArgMatcher, value: Any) -> bool:
         number = _number(value)
         if number is None or number < matcher.min:
             return False
-    if matcher.glob is not None:
-        if not isinstance(value, str) or not fnmatch.fnmatchcase(value, matcher.glob):
-            return False
+    if matcher.glob is not None and (
+        not isinstance(value, str) or not fnmatch.fnmatchcase(value, matcher.glob)
+    ):
+        return False
     return True
 
 

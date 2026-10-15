@@ -112,8 +112,23 @@ def _basis(*, scopes: tuple[str, ...] = ("tools:call",), mandate: Mandate | None
 
 
 def test_default_deny(tmp_path: pathlib.Path) -> None:
-    """没有规则命中 → deny，且 reason_code 稳定（deny-by-default）。"""
-    decision = _engine(tmp_path).evaluate(_request("merchant__cancel_checkout"), _basis())
+    """没有规则命中 → deny，且 reason_code 稳定（deny-by-default）。
+
+    两种情形都要拒：① 策略里一条规则都没有；② 有规则但都没命中——`merchant__**` 覆盖不到
+    psp 的工具。第二种是最初漏掉的情形：当时拿 `merchant__cancel_checkout` 当"没人管"的例子，
+    而它其实被 `merchant__**` 命中了（测试写错，实现没错）。
+    """
+    empty = _engine(
+        tmp_path,
+        """
+version: 1
+default: deny
+rules: []
+""",
+    )
+    assert empty.evaluate(_request("merchant__list_catalog"), _basis()).kind == "deny"
+
+    decision = _engine(tmp_path).evaluate(_request("psp__refund_payment"), _basis())
     assert decision.kind == "deny"
     assert decision.reason_code == "policy_denied"
 
