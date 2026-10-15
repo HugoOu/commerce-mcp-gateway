@@ -439,6 +439,7 @@
   - JanuScope 的定位是**通用本地 MCP 策略代理**：短生命周期 stdio 子进程、明确无持久状态、20+ 内置 Lens、上下文预注入（push）、关键词式 SQL 守卫、可选审计日志（`ARCHITECTURE.md`、`docs/`）。
   - 它自陈的局限（值得学习的写法）：`sqlGuard` 不是 SQL 解析器；脱敏只检查输出、不追踪来源；只读访问本身不能阻止推断式泄露。
   - 文献（Auditable Claims / Load-Bearing Evidence / RAC）要求的三件事——**授权绑定动作参数**、**证据可重构**、**非补偿性门**——JanuScope 都不做。
+  - 同源对照（2026-10-15 补充，调研细节见 `docs/threat-model.md` 的「依据」一节）：**CaMeL**（arXiv 2503.18813）在模型外面造一层保护层，用 **capability** 在工具调用处强制策略、阻断私有数据流向未授权通道；**AP2** 用 **mandate**（可验证数字凭证，Checkout / Payment 两类各分 Open / Closed 两阶段）表达用户意图，设计目标是「Verifiable Intent, Not Inferred Action」与不可否认的审计轨迹。本项目的「固定算子 + mandate」（ADR-0001）与「运行证据包」（ADR-0003）与这两者同源。
 - 推荐：定位锁为**面向 agentic commerce / pay 的受控执行与验证控制面**，明确不与其竞争通用代理能力，并采用以下清单：
   - **借鉴**：短路拒绝（不触碰 target）；管道有序且 `audit` 注册在最前；自陈局限的写法；三层防御（意图 / 门口 / 回程）的表述。
   - **不借鉴**：20+ Lens 的广度；上下文预注入；关键词式 SQL 守卫；短生命周期 stdio 形态。
@@ -447,6 +448,7 @@
 - 为什么不选 a：通用代理是已有成熟实现的赛道（AGPL 生态里有多个），且与你的差异化（可复算证据、预算、审批）无关。
 - 为什么不选 b：放弃证据与审批等于放弃你唯一的不可替代性——那是模型与框架都拿不走的部分。
 - 决策（已定，2026-10-15）：采纳推荐方案——定位锁为「面向 agentic commerce / pay 的受控执行与验证控制面」；按借鉴清单执行（借鉴短路拒绝、audit-first 顺序、自陈局限、三层防御；不借鉴 Lens 广度、上下文预注入、关键词 SQL 守卫、短生命周期 stdio）；并采纳架构补充（证据拆成 `record_pending` / `record_done`，见 `architecture.md`）。
+- 证据补充（2026-10-15，你已认可）：与 CaMeL 的 capability、AP2 的 mandate 的同源对照记入上文证据。对外叙事里可以直接说「策略语言边界不是拍脑袋定的，而是与 capability 和 mandate 对齐」——**决策本身不变**，只是证据与讲法变厚。
 
 ## ADR-0023 resources 面的拒绝形态（候选，含证据链与推荐，待你决策）
 
