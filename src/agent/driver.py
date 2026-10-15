@@ -97,17 +97,27 @@ def digest(events: list[dict[str, Any]]) -> str:
 async def connect_servers(
     stack: AsyncExitStack, servers: list[tuple[str, str]]
 ) -> tuple[list[dict[str, Any]], dict[str, tuple[Client, str]]]:
-    """连上若干 mock，把工具名按 ADR-0008 前缀成 `<alias>__<tool>`。"""
+    """连上若干上游，把工具名按 ADR-0008 前缀成 `<alias>__<tool>`。
+
+    - 目标写成 `http(s)://...` 就连 HTTP（网关），否则当 stdio 子进程路径（mock）。
+    - **只有一个上游时不加前缀**：前缀是为了消歧，单个上游没有歧义；网关自己已经给上游
+      工具加过前缀，这里再加一层会变成 `gateway__merchant__list_catalog`。
+    """
+    prefix = len(servers) > 1
     tools: list[dict[str, Any]] = []
     routing: dict[str, tuple[Client, str]] = {}
-    for alias, path in servers:
-        client = await stack.enter_async_context(
-            Client(server=StdioServerParameters(command=sys.executable, args=[path]), mode="auto")
-        )
+    for alias, target in servers:
+        if target.startswith(("http://", "https://")):
+            client = await stack.enter_async_context(Client(server=target, mode="auto"))
+        else:
+            client = await stack.enter_async_context(
+                Client(server=StdioServerParameters(command=sys.executable, args=[target]), mode="auto")
+            )
         for tool in (await client.list_tools()).tools:
             raw = tool.model_dump(by_alias=True)
-            qualified = f"{alias}__{raw.get('name')}"
-            routing[qualified] = (client, raw.get("name", ""))
+            real_name = raw.get("name", "")
+            qualified = f"{alias}__{real_name}" if prefix else real_name
+            routing[qualified] = (client, real_name)
             tools.append(
                 {
                     "type": "function",
