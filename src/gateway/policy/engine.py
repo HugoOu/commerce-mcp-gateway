@@ -172,6 +172,10 @@ class YamlPolicyEngine:
         """策略摘要：进证据，是重放前置条件的一部分（ADR-0003 / evaluation.md）。"""
         return digest(self.policy.model_dump(by_alias=True, mode="json"))
 
+    def binding_for(self, tool_name: str) -> Binding:
+        """这个工具的「参数 → 语义」映射（执行点用它找金额与商户）。没有就返回空绑定。"""
+        return self.policy.bindings.get(tool_name, Binding())
+
     def evaluate(self, request: InterceptedRequest, basis: AuthorizationBasis) -> Decision:
         required = self.policy.required_scopes.get(request.method)
         if required is not None and required not in basis.scopes:

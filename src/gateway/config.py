@@ -10,6 +10,8 @@ import pathlib
 import uuid
 from dataclasses import dataclass, field
 
+from .identity import IdentityConfig
+
 
 @dataclass(frozen=True)
 class UpstreamSpec:
@@ -27,8 +29,19 @@ class GatewayConfig:
     host: str = "127.0.0.1"
     port: int = 8765
     path: str = "/mcp"
-    evidence_path: pathlib.Path = pathlib.Path("runs/gateway-evidence.jsonl")
     run_id: str = field(default_factory=lambda: f"run-{uuid.uuid4().hex[:8]}")
+    evidence_dir: pathlib.Path = pathlib.Path("runs/evidence")
+    """证据链目录（ADR-0003 的双形态都落在这里）。"""
+    budget_path: pathlib.Path = pathlib.Path("runs/budget.sqlite")
+    approvals_path: pathlib.Path = pathlib.Path("runs/approvals.jsonl")
+    policy_path: pathlib.Path | None = None
+    """不给策略文件就是**全放行**（演示用），启动时会打印警告。"""
+    mandate_path: pathlib.Path | None = None
+    identity: IdentityConfig = field(default_factory=IdentityConfig)
+    approval_timeout_seconds: float = 60.0
+    sanitize: bool = True
+    list_ttl_ms: int = 30_000
+    """`tools/list` 的缓存提示（ADR-0010）。"""
 
     def __post_init__(self) -> None:
         aliases = [spec.alias for spec in self.upstreams]

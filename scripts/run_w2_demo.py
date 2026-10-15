@@ -47,7 +47,9 @@ def build_config(args: argparse.Namespace) -> GatewayConfig:
         ],
         host=args.host,
         port=args.port,
-        evidence_path=pathlib.Path(args.evidence),
+        evidence_dir=pathlib.Path(args.evidence),
+        policy_path=pathlib.Path(args.policy) if args.policy else None,
+        mandate_path=pathlib.Path(args.mandate) if args.mandate else None,
     )
 
 
@@ -76,7 +78,7 @@ def print_trace(path: pathlib.Path) -> None:
 async def main_async(args: argparse.Namespace) -> int:
     config = build_config(args)
     async with Gateway(config) as gateway:
-        print(f"[gateway] run_id={config.run_id} url={gateway.url} evidence={config.evidence_path}")
+        print(f"[gateway] run_id={config.run_id} url={gateway.url} evidence={config.evidence_dir}")
         server = uvicorn.Server(
             uvicorn.Config(gateway.app, host=config.host, port=config.port, log_level="warning")
         )
@@ -93,7 +95,7 @@ async def main_async(args: argparse.Namespace) -> int:
         finally:
             server.should_exit = True
             await serving
-    print_trace(config.evidence_path)
+    print_trace(config.evidence_dir / "chain.jsonl")
     return code
 
 
@@ -105,7 +107,9 @@ def main() -> int:
     parser.add_argument("--max-steps", type=int, default=12)
     parser.add_argument("--merchant-mode", default="none")
     parser.add_argument("--psp-mode", default="none")
-    parser.add_argument("--evidence", default="runs/gateway-evidence.jsonl")
+    parser.add_argument("--evidence", default="runs/evidence")
+    parser.add_argument("--policy", default="src/gateway/policy/demo-policy.yaml")
+    parser.add_argument("--mandate", default="src/gateway/demo-mandate.yaml")
     parser.add_argument("--record", default="runs/w2-demo.jsonl", help="driver 轨迹（空字符串表示不录）")
     args = parser.parse_args()
     return asyncio.run(main_async(args))

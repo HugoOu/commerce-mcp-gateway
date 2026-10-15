@@ -1,0 +1,12 @@
+# 演示用的用户意图（mandate）——结构对齐 AP2 的 open mandate，见 docs/mock-world.md §2。
+# 用法：`GatewayConfig(mandate_path=pathlib.Path("src/gateway/demo-mandate.yaml"))`
+mandate_id: mnd_demo_0001
+kind: open
+currency: CNY
+budget_total: 100.0
+per_txn_max: 50.0
+allowed_merchants:
+  - m1
+allowed_categories:
+  - food
+  - drink

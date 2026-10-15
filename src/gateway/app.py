@@ -1,21 +1,26 @@
-"""组装网关：上游 stdio 子进程 + 下游 Streamable HTTP。
+"""组装网关：上游 stdio 子进程 + 下游 Streamable HTTP + 控制面内核——AI 起草，见 ADR-0026。
 
-生命周期：进入时连上游（客户端只在 `upstream.py` 里构造），退出时一起关掉；
-证据账本跟着生命周期开合。
+生命周期：进入时连上游、跑一次启动对账，退出时一起关掉。
 """
 
 from __future__ import annotations
 
+import time
 from contextlib import AsyncExitStack
 from typing import Self
 
 from mcp.server.mcpserver import MCPServer
 from starlette.applications import Starlette
 
+from .approval import FileApprovalGate
+from .budget import SqliteBudgetLedger
 from .config import GatewayConfig
 from .enforce import Enforcer
-from .evidence import EvidenceLog
+from .evidence import ChainLedger
 from .frontdoor import build_server
+from .identity import IdentityResolver
+from .policy import AllowAllPolicy, load_policy
+from .sanitize import Sanitizer
 from .upstream import UpstreamRegistry
 
 
@@ -24,9 +29,24 @@ class Gateway:
 
     def __init__(self, config: GatewayConfig) -> None:
         self.config = config
-        self.evidence = EvidenceLog(config.evidence_path, config.run_id)
+        self.evidence = ChainLedger(config.evidence_dir)
+        self.budget = SqliteBudgetLedger(config.budget_path)
+        self.policy = load_policy(config.policy_path) if config.policy_path else AllowAllPolicy()
+        self.identity = IdentityResolver(config.identity)
+        self.sanitizer = Sanitizer(enabled=config.sanitize)
+        self.approval = FileApprovalGate(config.approvals_path, timeout_seconds=config.approval_timeout_seconds)
         self.registry = UpstreamRegistry(config.upstreams)
-        self.enforcer = Enforcer(self.registry, self.evidence)
+        self.enforcer = Enforcer(
+            registry=self.registry,
+            evidence=self.evidence,
+            policy=self.policy,
+            budget=self.budget,
+            identity=self.identity,
+            sanitizer=self.sanitizer,
+            approval=self.approval,
+            run_id=config.run_id,
+            list_ttl_ms=config.list_ttl_ms,
+        )
         self.server: MCPServer | None = None
         self.app: Starlette | None = None
         self._stack: AsyncExitStack | None = None
@@ -35,6 +55,11 @@ class Gateway:
         self._stack = AsyncExitStack()
         await self._stack.__aenter__()
         try:
+            if self.config.policy_path is None:
+                print("[gateway] 警告：没有给策略文件，本次**全放行**（只该用于演示）")
+            reclaimed = self.budget.reclaim_expired(now=time.time())  # 启动对账（ADR-0002）
+            if reclaimed:
+                print(f"[gateway] 启动对账：回收了 {len(reclaimed)} 条过期 hold")
             await self.registry.start(self._stack)
             self.server = build_server(self.enforcer)
             self.app = self.server.streamable_http_app(
@@ -42,14 +67,17 @@ class Gateway:
             )
         except BaseException:
             await self._stack.aclose()
-            self.evidence.close()
+            self.close()
             raise
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
         if self._stack is not None:
             await self._stack.aclose()
-        self.evidence.close()
+        self.close()
+
+    def close(self) -> None:
+        self.budget.close()
 
     @property
     def url(self) -> str:

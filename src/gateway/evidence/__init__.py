@@ -65,6 +65,8 @@ class EvidenceEntry:
     upstream: str | None = None
     reason_code: str | None = None
     outcome: str | None = None
+    sanitized: bool = False
+    """这次结果是否被净化过（ADR-0003 的 record_done 要记脱敏标记）。"""
     args_digest: str | None = None
     result_digest: str | None = None
     policy_digest: str | None = None

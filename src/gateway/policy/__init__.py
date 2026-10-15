@@ -19,9 +19,10 @@ from typing import Protocol
 
 from ..decision import AuthorizationBasis, Decision, InterceptedRequest
 from .engine import YamlPolicyEngine, load_policy, segment_glob
-from .schema import PolicyError, PolicyFile, Rule
+from .schema import Binding, PolicyError, PolicyFile, Rule
 
 __all__ = [
+    "AllowAllPolicy",
     "PolicyEngine",
     "PolicyError",
     "PolicyFile",
@@ -36,6 +37,22 @@ class PolicyEngine(Protocol):
     """执行点只依赖这一个方法。"""
 
     def evaluate(self, request: InterceptedRequest, basis: AuthorizationBasis) -> Decision: ...
+
+
+class AllowAllPolicy:
+    """演示 / 测试用：全放行，**不做**授权门（连 scope 都不看）。
+
+    只在没给策略文件时使用，`Gateway` 启动时会打印警告。生产必须给策略文件——ADR-0020 说
+    「策略只能收紧授权」，而「全放行」连门都没有。
+    """
+
+    digest = "allow-all"
+
+    def evaluate(self, request: InterceptedRequest, basis: AuthorizationBasis) -> Decision:
+        return Decision(kind="allow")
+
+    def binding_for(self, tool_name: str) -> Binding:
+        return Binding()
 
 
 
