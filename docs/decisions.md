@@ -491,8 +491,8 @@
 - 为什么不选 a：ADR-0006 / 0010 / 0013 全部失去载体——审批用不上 `input_required`，缓存提示无处可放，游标语义退化。
 - 为什么不选 b：会拒绝一切老客户端，演示与评测的可复现性都变差；而双代并存并不额外增加多少工作量（SDK 已内置）。
 - 附带发现（不影响决策，但要处理）：8000 端口被一个**残留的 hello-mcp HTTP 进程**占着（`[Errno 10048]`），HTTP 探针正是打到那个老实例上；W2 起网关之前先清残留进程。另外「能力广告」随时代不同（同一台 server，现代版报 `list_changed=True` / `subscribe=True`，握手版全 False）——**不要依赖 SDK 默认值**，按 ADR-0012 显式设置能力广告（尤其是 `subscribe`：不实现通知过滤就不能声明）。
-- 决策：TODO(你)
-- 依据：TODO(你)
+- 决策（已定，2026-10-15）：采纳推荐方案——**agent 边优先现代版**（`2026-07-28`）；网关作为 server 端同时服务两代（`serve_dual_era_loop`），但对外文档、演示与评测以现代版为准；driver 用 `mode="auto"`，**不 pin 版本**；能力广告按 ADR-0012 显式设置，不依赖 SDK 默认值。（附：残留的 8000 端口进程已于 2026-10-15 清理，`Stop-Process -Id 15988`，复查监听数为 0。）
+- 依据：本页实测表（`scripts/probe_era.py`，2026-10-15）+ 源码位置（`mcp/server/connection.py:161`、`mcp/client/caching.py:341`、`mcp_types/methods.py:411`）。
 
 ## 参考笔记（AI 记录，非决策本身）
 

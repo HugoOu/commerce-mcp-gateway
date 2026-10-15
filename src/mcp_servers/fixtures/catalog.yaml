@@ -1,0 +1,27 @@
+merchant_id: m1
+currency: CNY
+items:
+  - sku: taco
+    title: Taco
+    description: Soft shell taco with salsa.
+    price: 3.5
+    stock: 100
+    category: food
+  - sku: burrito
+    title: Burrito
+    description: Large flour tortilla with rice and beans.
+    price: 42.0
+    stock: 20
+    category: food
+  - sku: agua-fresca
+    title: Agua Fresca
+    description: Chilled fruit water.
+    price: 12.0
+    stock: 50
+    category: drink
+  - sku: usb-c-cable
+    title: USB-C Cable
+    description: 2m braided charging cable.
+    price: 39.0
+    stock: 5
+    category: electronics
