@@ -122,13 +122,14 @@ async def test_channel_two_over_limit_payment(tmp_path: pathlib.Path) -> None:
                 "psp__create_payment_intent",
                 {"amount": 999.0, "merchant_id": "m1", "checkout_ref": "ck_x", "idempotency_key": "k1"},
             )
+        # 账本在 `async with` 退出时就关了，所以要在里面读（这是第一次踩的坑）
+        balance = gateway.budget.balance("agent-dev")
 
     is_error, text = _payload(result)
     assert is_error
     assert "amount_over_limit" in text
     assert "999" not in text
     assert "50" not in text  # mandate 的单笔上限是 50，绝不能出现在线上理由里
-    balance = gateway.budget.balance("agent-dev")
     assert balance.active_holds == 0.0  # 被拒的调用不留下 hold
     rows = _chain(gateway)
     assert any(row["reason_code"] == "amount_over_limit" for row in rows)
@@ -157,10 +158,10 @@ async def test_allowed_payment_goes_through_and_settles(tmp_path: pathlib.Path) 
                 "psp__create_payment_intent",
                 {"amount": 9.71, "merchant_id": "m1", "checkout_ref": "ck_ok", "idempotency_key": "k-ok"},
             )
+        balance = gateway.budget.balance("agent-dev")
 
     is_error, text = _payload(result)
     assert not is_error, text
-    balance = gateway.budget.balance("agent-dev")
     assert balance.committed == 9.71
     assert balance.active_holds == 0.0
 
@@ -173,10 +174,10 @@ async def test_declined_payment_releases_the_hold(tmp_path: pathlib.Path) -> Non
                 "psp__create_payment_intent",
                 {"amount": 9.71, "merchant_id": "m1", "checkout_ref": "ck_d", "idempotency_key": "k-d"},
             )
+        balance = gateway.budget.balance("agent-dev")
 
     is_error, text = _payload(result)
     assert not is_error, text  # PSP 是「调用成功 + 状态为失败」
-    balance = gateway.budget.balance("agent-dev")
     assert balance.committed == 0.0
     assert balance.active_holds == 0.0  # 被拒 → release，不占额度
     assert any(row["outcome"] == "declined" for row in _chain(gateway))
@@ -196,6 +197,9 @@ async def test_every_intercepted_call_lands_in_the_chain(tmp_path: pathlib.Path)
     run_id = gateway.config.run_id
     report = gateway.evidence.verify(run_id)
     assert report.ok, report.detail
-    assert report.entries >= 5
+    # 一次 tools/list（done）+ 一次被拒（pending）+ 一次允许（pending + done）= 4
+    assert report.entries >= 4
+    decisions = {row["decision"] for row in _chain(gateway)}
+    assert {"allow", "deny"} <= decisions
     assert gateway.evidence.replay(run_id).preconditions_met
 

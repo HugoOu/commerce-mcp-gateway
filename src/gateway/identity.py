@@ -34,7 +34,6 @@ class TokenIdentity:
 @dataclass(frozen=True)
 class IdentityConfig:
     tokens: dict[str, TokenIdentity] = field(default_factory=dict)
-    mandate_path: pathlib.Path | None = None
     audience: str = "commerce-mcp-gateway"
     """token 的 audience 必须绑定到本网关（ADR-0019 的 audience 绑定）。"""
     allow_anonymous: bool = True
@@ -59,9 +58,14 @@ def load_mandate(path: pathlib.Path) -> Mandate:
 class IdentityResolver:
     """token → `AuthorizationBasis`。认不出来就返回 `None`，由执行点硬拒。"""
 
-    def __init__(self, config: IdentityConfig) -> None:
+    def __init__(self, config: IdentityConfig, *, mandate: Mandate | None = None) -> None:
+        """mandate 由**调用方**传进来（`GatewayConfig.mandate_path` 只有一处定义）。
+
+        早先把它放在 `IdentityConfig` 里，结果网关读的是另一处字段 → mandate 恒为 None，
+        所有花钱的调用都被 `no_mandate` 拒掉。路径只该有一个来源。
+        """
         self.config = config
-        self.mandate = load_mandate(config.mandate_path) if config.mandate_path else None
+        self.mandate = mandate
 
     def basis(self, token: str | None) -> AuthorizationBasis | None:
         identity = self.config.tokens.get(token) if token else None

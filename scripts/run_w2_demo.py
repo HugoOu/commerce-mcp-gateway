@@ -18,6 +18,7 @@ import pathlib
 import sys
 
 import uvicorn
+from mcp.client.client import Client
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -62,16 +63,24 @@ async def wait_started(server: uvicorn.Server, timeout: float = 15.0) -> None:
     raise RuntimeError(f"网关在 {timeout}s 内没有起来")
 
 
+async def print_tool_list(url: str) -> None:
+    """把网关暴露的工具清单打出来——ADR-0010 的过滤效果要看得见。"""
+    async with Client(server=url, mode="auto") as client:
+        tools = [tool.name for tool in (await client.list_tools()).tools]
+    print(f"[gateway] 暴露 {len(tools)} 个工具：{', '.join(tools)}")
+
+
 def print_trace(path: pathlib.Path) -> None:
     print("\n--- 网关证据日志（agent → 网关 → 上游 → 回到 agent）---")
     for entry in load_records(path):
         tool = entry.get("tool") or ""
         suffix = f" {tool}" if tool else ""
         count = f" count={entry['count']}" if "count" in entry else ""
+        duration = entry.get("duration_ms")
+        timing = f" {duration}ms" if duration is not None else ""
         print(
             f"  #{entry['seq']:02d} {entry['method']}{suffix}"
-            f" decision={entry.get('decision')} outcome={entry.get('outcome')}{count}"
-            f" {entry.get('duration_ms')}ms"
+            f" decision={entry.get('decision')} outcome={entry.get('outcome') or '-'}{count}{timing}"
         )
 
 
@@ -84,6 +93,7 @@ async def main_async(args: argparse.Namespace) -> int:
         )
         serving = asyncio.create_task(server.serve())
         await wait_started(server)
+        await print_tool_list(gateway.url)
         try:
             driver_config = RunConfig(
                 servers=[("gateway", gateway.url)],

@@ -18,7 +18,7 @@ from .config import GatewayConfig
 from .enforce import Enforcer
 from .evidence import ChainLedger
 from .frontdoor import build_server
-from .identity import IdentityResolver
+from .identity import IdentityResolver, load_mandate
 from .policy import AllowAllPolicy, load_policy
 from .sanitize import Sanitizer
 from .upstream import UpstreamRegistry
@@ -32,7 +32,10 @@ class Gateway:
         self.evidence = ChainLedger(config.evidence_dir)
         self.budget = SqliteBudgetLedger(config.budget_path)
         self.policy = load_policy(config.policy_path) if config.policy_path else AllowAllPolicy()
-        self.identity = IdentityResolver(config.identity)
+        self.identity = IdentityResolver(
+            config.identity,
+            mandate=load_mandate(config.mandate_path) if config.mandate_path else None,
+        )
         self.sanitizer = Sanitizer(enabled=config.sanitize)
         self.approval = FileApprovalGate(config.approvals_path, timeout_seconds=config.approval_timeout_seconds)
         self.registry = UpstreamRegistry(config.upstreams)
