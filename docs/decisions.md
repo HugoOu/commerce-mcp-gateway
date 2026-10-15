@@ -513,8 +513,8 @@
 - 为什么不选 b：与 ADR-0016 的「为什么不选 b」同因——下一步由模型决定、难以固定，I4 的重放确定性会不可测；框架还会接管消息历史与工具 schema，trace 与 record&replay 都要和框架内部状态对齐。
 - 为什么不选 c：`httpx2` 是 mcp 自带 fork 的名字，直接依赖它比较脆；手写工具调用解析约多 40 行且容易出错，留作备选即可。
 - 为什么不选 d：现在只有一个 OpenAI 兼容端点，LiteLLM 的多 provider / 路由 / 回退都用不上，却要付出依赖面与启动时间。
-- 决策：TODO(你)
-- 依据：TODO(你)
+- 决策（已定，2026-10-15）：采纳推荐方案，并按你的补充收窄——**LiteLLM 完全不做**（连可选适配器也不写，只在本页留一句 future work）；`ModelClient` 接口**保留**，但保留的理由改成「**record&replay 必须能替换模型调用**」，不是「便于换 provider」；默认实现用 `openai` SDK；`pyproject.toml` 的 wheel 包列表补 `src/mcp_servers`。
+- 依据：本页证据（mini-swe-agent 的工具面 / 模型层 / 轨迹形态、LiteLLM 的依赖代价、当前 venv 现状）。
 
 ## 参考笔记（AI 记录，非决策本身）
 
