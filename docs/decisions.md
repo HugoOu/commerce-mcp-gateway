@@ -69,8 +69,15 @@
 - 为什么不选 b：stdio 不便于多客户端与独立观测。
 - 决策（已定，2026-10-14）：采纳推荐方案——对 agent 暴露 Streamable HTTP，对 mock 用 stdio。
 
-## ADR-0005 SDK 代理能力与转发实现方式（Step 3 决定）
+## ADR-0005 SDK 代理能力与转发实现方式（候选，含 AI 已核实事实，待你决策）
 
+- 背景：网关需要把请求转发到上游 MCP server，但 SDK 没有内置代理封装（2026-10-04 已核实）；Step 3 又跑通了 hello-MCP，需要据实测事实决定转发怎么写。
+- AI 已核实的事实（2026-10-15，SDK 2.3.0）：
+  - 没有内置代理：`mcp.server.mcpserver` 里不存在 proxy 实现；转发逻辑要自己写。
+  - 但有两个可用抓手：`MCPServer.middleware`（中间件钩子）与 `MCPServer.streamable_http_app` / `session_manager`（可直接挂进自己的 ASGI 应用）。
+  - 客户端侧：`ClientSession` 有 `dispatch_input_request`（MRTR 钩子）、`discover` / `send_discover`（版本探测）、`validate_tool_result`（输出校验）、`subscribe_resource`。
+  - 协议版本：`HANDSHAKE_PROTOCOL_VERSIONS` 到 `2025-11-25`，`MODERN_PROTOCOL_VERSIONS` 只有 `2026-07-28`；两条传输默认都协商到 `2025-11-25`。
+  - 两条传输都跑通（stdio 与 Streamable HTTP）；工具异常返回 `isError=True` 的 result（验证 ADR-0007）。
 - 决策：TODO(你)
 - 依据：TODO(你)
 
