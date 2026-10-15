@@ -69,16 +69,46 @@
 - 为什么不选 b：stdio 不便于多客户端与独立观测。
 - 决策（已定，2026-10-14）：采纳推荐方案——对 agent 暴露 Streamable HTTP，对 mock 用 stdio。
 
-## ADR-0005 SDK 代理能力与转发实现方式（候选，含 AI 已核实事实，待你决策）
+## ADR-0005 SDK 代理能力与转发实现方式（候选，含调研与推荐，待你决策）
 
-- 背景：网关需要把请求转发到上游 MCP server，但 SDK 没有内置代理封装（2026-10-04 已核实）；Step 3 又跑通了 hello-MCP，需要据实测事实决定转发怎么写。
-- AI 已核实的事实（2026-10-15，SDK 2.3.0）：
-  - 没有内置代理：`mcp.server.mcpserver` 里不存在 proxy 实现；转发逻辑要自己写。
-  - 但有两个可用抓手：`MCPServer.middleware`（中间件钩子）与 `MCPServer.streamable_http_app` / `session_manager`（可直接挂进自己的 ASGI 应用）。
-  - 客户端侧：`ClientSession` 有 `dispatch_input_request`（MRTR 钩子）、`discover` / `send_discover`（版本探测）、`validate_tool_result`（输出校验）、`subscribe_resource`。
-  - 协议版本：`HANDSHAKE_PROTOCOL_VERSIONS` 到 `2025-11-25`，`MODERN_PROTOCOL_VERSIONS` 只有 `2026-07-28`；两条传输默认都协商到 `2025-11-25`。
-  - 两条传输都跑通（stdio 与 Streamable HTTP）；工具异常返回 `isError=True` 的 result（验证 ADR-0007）。
+- 背景：网关需要把请求转发到上游 MCP server，同时在下游做拦截与合成。SDK 没有内置代理（2026-10-04 已核实），所以要分别决定「转发」与「拦截」用什么机制。
+
+- 证据一：SDK 公开 API 面（2026-10-15 实测，SDK 2.3.0）
+
+| 面 | 可用件 | 关键点 |
+| --- | --- | --- |
+| 下游（server） | `MCPServer`：`tool` / `add_tool` / `resource` / `prompt` / `run(transport=stdio, sse, streamable-http)` | 一个类同时支持三种传输 |
+| 下游挂载 | `streamable_http_app` / `sse_app` / `session_manager` | 可直接挂进自己的 ASGI 应用（加自己的路由与生命周期） |
+| 下游拦截 | `MCPServer.middleware`（`list[ServerMiddleware]`） | `(ctx, call_next) -> result`，在**每个入站请求/通知的最早处**执行（早于校验、查找、握手）；可读 `ctx.method` / `ctx.params`（未校验的原始参数）；可 `call_next(replace(ctx, params=...))` 改写；可**在 `call_next` 之前抛错来否决**（含握手）；通知的返回值被丢弃；`ctx.request_id is None` 可区分通知 |
+| 下游鉴权 | `token_verifier` / `auth_server_provider` 参数 + `AuthenticationMiddleware` / `RequireAuthMiddleware` / `BearerAuthBackend` | SDK 自带 resource server 侧的 bearer 校验中间件 |
+| 观测 | `OpenTelemetryMiddleware`（`server/_otel.py`），**默认已注册** | SDK 已在发 OTel span——我们的 `telemetry/` 应是配置与属性映射，不是从零造 |
+| 上游（client） | `ClientSession`：`initialize` / `list_tools` / `call_tool` / `read_resource` / `subscribe_resource` / `dispatch_input_request` / `discover` / `validate_tool_result` | `dispatch_input_request` 是 MRTR 客户端钩子；`validate_tool_result` 说明输出校验归消费者 |
+| 上游传输 | `stdio_client(StdioServerParameters)`；`streamable_http_client(url)`（**返回两个值**） | 与 ADR-0004「对 mock 用 stdio」一致 |
+| 版本 | `HANDSHAKE_PROTOCOL_VERSIONS` 到 `2025-11-25`；`MODERN_PROTOCOL_VERSIONS` 只有 `2026-07-28` | 默认协商到握手那代；现代版走另一条路径（W2 验证项） |
+| 错误形状 | 工具抛异常 → `isError=True` + `resultType=complete`；异常消息**不进**载荷 | 验证 ADR-0007；可操作的拒绝理由必须自己构造 |
+| 结构化输出 | 默认不填 `structuredContent`（结果是文本 JSON）；需 `@mcp.tool(structured_output=True)` | `sanitize/` 要同时覆盖两种形态 |
+| 字段命名 | SDK 用 snake_case（`is_error` / `structured_content` / `result_type`），线上别名 camelCase | 打印与比较用 `model_dump(by_alias=True)` |
+
+- 证据二：既有实现的通行做法（2026-10-15 调研）
+  - `TBXark/mcp-proxy`（Go）：**单个 HTTP 入口聚合多个 MCP server**；上游支持 `stdio` / `sse` / `streamable-http` 三种客户端类型；并且**由代理持有并刷新下游 OAuth 令牌**（authorize once, hold and refresh for every caller）。
+  - `open-webui/mcpo`（Python）：把 stdio 的 MCP server 暴露成 HTTP 端点——Python 生态里形态最接近的一个。
+  - `IBM/mcp-context-forge`、`agentgateway/agentgateway`、`openziti/mcp-gateway` 等聚合器：都是「上游混合传输 + 下游统一端点」。
+  - 共同结论：**没有现成的 Python 代理封装；所有实现都自己写转发，并且自己持有上游凭证**——与 ADR-0019 的推荐一致。
+
+- 推荐：
+  1. **下游**用 `MCPServer`，并以 `streamable_http_app` 挂进我们自己的 ASGI 应用；**拦截点用 `ServerMiddleware`**，但决策逻辑仍在 `enforce/`——中间件只负责把请求交给执行点、落实 Decision、把结果交回。
+  2. **上游**用 `ClientSession` + `stdio_client`（ADR-0004），**转发逻辑自己写**（在工具的 handler 里调用上游 session）；不引入 Go 生态的代理。
+  3. **凭证**由网关自己持有（ADR-0019）；`TBXark/mcp-proxy` 的「持有并刷新」是可直接借鉴的先例。
+  4. **鉴权**优先复用 SDK 的 `token_verifier` 与 `AuthenticationMiddleware`，`identity/` 在其上产出 `AuthorizationBasis` 与 `authz_basis`。
+  5. **观测**复用默认注册的 `OpenTelemetryMiddleware`，`telemetry/` 只做属性映射与补充。
+  6. **W2 第一个技术验证项**：确认现代协议版（`2026-07-28`）能否协商成功——它决定 ADR-0006 的 `input_required` 合成能否照设计落地；若不可达，按 AGENTS.md 的「实现期规则」停下来提 ADR。
+
+- 备选：a) 只用 SDK 的 server、不做拦截；b) 纯中间件实现（不自己写转发）；c) 引入现成代理（Go 的 mcp-proxy 或 Python 的 mcpo）。
+- 为什么不选 a：没有拦截点就没有这个项目。
+- 为什么不选 b：中间件只覆盖下游一个方向；上游凭证、净化、证据都需要自己的转发路径。
+- 为什么不选 c：跨语言构建链（Go）或功能不匹配（mcpo 面向 OpenAPI 暴露），且我们要学的是控制面本身。
 - 决策：TODO(你)
+
 - 依据：TODO(你)
 
 
