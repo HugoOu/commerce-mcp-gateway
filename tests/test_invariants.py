@@ -1,7 +1,7 @@
 """四条一致性测试（测试当 oracle）：先写、先红；W3 里实现到通过。
 
-**进度**：`deny_by_default` 已随 W3 Step 1（策略）、`budget_charges_exactly_once` 已随 Step 2
-（预算）转绿；`evidence` 一条仍是 `strict=True` 的 xfail——等证据链写完，**把 xfail 标记删掉**，这就是
+**进度**：四条全部转绿——`deny_by_default`（Step 1 策略）、`budget_charges_exactly_once`（Step 2 预算）、
+`audit_covers_every_intercepted_call` 与 `replay_is_deterministic`（Step 3 证据链）。「先写测试再实现」的
 「先写测试再实现」的验收方式（AGENTS.md 的 AI Native 实践 4）。
 """
 
@@ -87,7 +87,6 @@ def test_budget_charges_exactly_once(tmp_path: pathlib.Path) -> None:
     assert ledger.balance("s1").committed == 30.0
 
 
-@pytest.mark.xfail(reason=W3_CORE, strict=True)
 def test_audit_covers_every_intercepted_call(tmp_path: pathlib.Path) -> None:
     """每次调用恰好 pending + done 两条；deny 也留痕；verify 必须通过（I3 / 威胁 T9）。"""
     ledger = ChainLedger(tmp_path / "evidence")
@@ -99,12 +98,13 @@ def test_audit_covers_every_intercepted_call(tmp_path: pathlib.Path) -> None:
     assert report.entries == 3
 
 
-@pytest.mark.xfail(reason=W3_CORE, strict=True)
 def test_replay_is_deterministic(tmp_path: pathlib.Path) -> None:
     """同一证据包重放两次，决策序列逐条一致，且重放前置条件满足（I4）。"""
     ledger = ChainLedger(tmp_path / "evidence")
     ledger.record_pending(_entry(seq=1, phase="pending", policy_digest="p0", budget_before=0.0))
-    ledger.record_done(_entry(seq=1, phase="done", outcome="ok", policy_digest="p0", budget_after=9.71))
+    ledger.record_done(
+        _entry(seq=1, phase="done", outcome="ok", policy_digest="p0", budget_after=9.71, result_digest="d1")
+    )
     first = ledger.replay("r1")
     second = ledger.replay("r1")
     assert first.decisions == second.decisions

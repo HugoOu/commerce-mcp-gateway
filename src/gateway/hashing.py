@@ -10,6 +10,7 @@ import json
 from typing import Any
 
 __all__ = ["canonical_json", "digest"]
+__all__ = ["canonical_json", "digest", "sha256_hex"]
 
 
 def canonical_json(value: Any) -> str:
@@ -17,5 +18,11 @@ def canonical_json(value: Any) -> str:
 
 
 def digest(value: Any) -> str:
-    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()[:16]
+    """短摘要（16 位十六进制）：给日志与对照用的那种。"""
+    return sha256_hex(value)[:16]
+
+
+def sha256_hex(value: Any) -> str:
+    """完整 sha256（64 位十六进制）。链上哈希用它——短摘要碰撞面太大，不适合做链。"""
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 

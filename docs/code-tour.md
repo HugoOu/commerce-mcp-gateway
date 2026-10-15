@@ -33,6 +33,15 @@
 
 ## 4. `src/gateway/evidence/` —— 证据链与证据包（待填）
 
+- **读什么**：`EvidenceEntry`（链上的单元）→ `_entry_hash` / `_merkle_root`（两个哈希怎么算）→ `ChainLedger.record_pending` / `record_done`（写入顺序）→ `verify`（能检出什么）→ `replay`（前置条件与决策重构）。
+- **为什么这样切**：
+  - **`prev_hash` 参与自己的哈希**：改了任何一条，它后面所有条目的哈希都会变，链因此不可局部伪造；
+  - **写入顺序是「链 → 包 → manifest」**：中途崩溃会让包比链少一条，`verify` 会报出来——宁可报错，也不要静默地让账本与证据对不上；
+  - **链与包互为见证**：包内截断靠 manifest 的条数与 Merkle 根发现，链被截断靠「包的叶哈希必须都能在链上找到」发现；
+  - **`replay` 的评估器是参数**：证据层不 import 策略（层次干净），Step 4 由执行点把策略闭包传进来；
+  - **诚实边界**：把链与全部 manifest 一起重写的对手检不出（那需要外部锚点或见证，威胁模型 R5 本版未采纳）。
+- **自测**：① 为什么短摘要（16 位十六进制）不能拿来做链？② 删掉运行包的最后一条，`verify` 靠什么发现？③ 只删链的最后一条，为什么 `verify()` 也能发现？④ 重放前置条件里为什么需要 `policy_digest` 与预算前后？⑤ 「verify 通过」保证了什么、又没保证什么？
+
 ## 5. `src/gateway/enforce.py` —— 执行点（待填，W3 Step 4）
 
 ## 6. `src/gateway/frontdoor.py` + `upstream.py` —— 前后门（待填）
