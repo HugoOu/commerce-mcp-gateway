@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import pathlib
 
-import pytest
-
 from gateway.budget import SqliteBudgetLedger
 from gateway.decision import AuthorizationBasis, InterceptedRequest, Mandate
 from gateway.evidence import ChainLedger, EvidenceEntry

@@ -133,17 +133,9 @@ class DurableApprovalGate:
     async def request(
         self, request: InterceptedRequest, decision: Decision, basis: AuthorizationBasis
     ) -> Decision:
-        pending = PendingApproval(
-            approval_id=f"apr_{uuid.uuid4().hex[:10]}",
-            subject=basis.subject,
-            action=f"{request.method} {request.name or ''}",
-            action_digest=digest({"method": request.method, "name": request.name, "arguments": request.arguments}),
-            reason_code=decision.reason_code,
-            created_at=round(time.time(), 3),
-        )
-        self._append({"kind": "pending", **asdict(pending)})
-        print(f"[approval] 待审批 {pending.approval_id}：{pending.action}（{pending.reason_code}）——"
-              f"`uv run python scripts/approve.py list` 查看，`approve {pending.approval_id}` 批准")
+        # 落盘与协议通道共用 `register()`：两条通道必须记录同一个形状，
+        # 否则 CLI 看到的和客户端批准的可能对不上。
+        pending = self.register(request, decision, basis)
 
         waited = 0.0
         while waited < self.timeout_seconds:

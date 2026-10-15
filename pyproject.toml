@@ -35,3 +35,7 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint.per-file-ignores]
+"""tests 里「先起环境、再起客户端」的嵌套 `with` 比合并成一个更易读，所以这条风格规则只对测试放宽。"""
+"tests/*" = ["SIM117"]

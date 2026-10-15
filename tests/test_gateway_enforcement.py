@@ -16,11 +16,10 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+import mcp_types as types
 import uvicorn
 from mcp.client.client import Client
 from mcp.shared.exceptions import MCPError
-
-import mcp_types as types
 
 from gateway.app import Gateway
 from gateway.config import GatewayConfig, UpstreamSpec
@@ -123,7 +122,7 @@ async def test_approval_channel_approves_then_continues(tmp_path: pathlib.Path) 
 
 async def test_approval_decline_is_a_deny(tmp_path: pathlib.Path) -> None:
     """拒绝就是拒绝：`decline` → `approval_denied`（fail-closed）。"""
-    async with running_gateway(tmp_path) as (gateway, url):
+    async with running_gateway(tmp_path) as (_gateway, url):
         async with Client(server=url, mode="auto", elicitation_callback=_decline) as client:
             result = await client.call_tool(
                 "merchant__request_refund", {"order_id": "ord_missing", "reason": "test"}

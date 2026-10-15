@@ -47,7 +47,7 @@ def load_mandate(path: pathlib.Path) -> Mandate:
         path.read_text(encoding="utf-8")
     )
     if not isinstance(raw, dict):
-        raise ValueError(f"mandate 文件顶层必须是映射：{path}")
+        raise TypeError(f"mandate 文件顶层必须是映射：{path}")
     if "allowed_merchants" in raw:
         raw["allowed_merchants"] = tuple(raw["allowed_merchants"])
     if "allowed_categories" in raw:

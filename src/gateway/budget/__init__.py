@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS holds (
 
 def _to_cents(amount: float) -> int:
     """边界转换：接口用浮点（MCP 世界就是浮点），账本内部一律整数分。"""
-    return int(round(amount * 100))
+    return round(amount * 100)
 
 
 def _to_amount(cents: int) -> float:
