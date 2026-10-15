@@ -1,7 +1,8 @@
 """四条一致性测试（测试当 oracle）：先写、先红；W3 里实现到通过。
 
-每条都带 `strict=True` 的 xfail——三处核心还没实现，失败是**预期状态**。等你把它们写完，
-**把 xfail 标记删掉**让测试真绿，这就是「先写测试再实现」的验收方式（AGENTS.md 的 AI Native 实践 4）。
+**进度**：`deny_by_default` 已随 W3 Step 1（策略）转绿；`budget` 与 `evidence` 两条仍是
+`strict=True` 的 xfail——等你把那两处核心写完，**把 xfail 标记删掉**让它们真绿，这就是
+「先写测试再实现」的验收方式（AGENTS.md 的 AI Native 实践 4）。
 """
 
 from __future__ import annotations
@@ -56,10 +57,11 @@ def _entry(**over: object) -> EvidenceEntry:
     return EvidenceEntry(**base)  # type: ignore[arg-type]
 
 
-@pytest.mark.xfail(reason=W3_CORE, strict=True)
 def test_deny_by_default(tmp_path: pathlib.Path) -> None:
     """没有任何 allow 规则命中 → 必须 deny，并给出稳定 reason_code（I1 / ADR-0007）。"""
-    policy = load_policy(tmp_path / "policy.yaml")
+    path = tmp_path / "policy.yaml"
+    path.write_text("version: 1\ndefault: deny\nrules: []\n", encoding="utf-8")
+    policy = load_policy(path)
     decision = policy.evaluate(_request(), _basis())
     assert decision.kind == "deny"
     assert decision.reason_code == "policy_denied"

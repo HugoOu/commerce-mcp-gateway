@@ -1,0 +1,62 @@
+# 演示用策略（W2 的 mock 世界）：默认拒，只开「买一次东西」需要的那条路径。
+# 用法：`load_policy(pathlib.Path("src/gateway/policy/demo-policy.yaml"))`
+version: 1
+default: deny
+
+bindings:
+  psp__create_payment_intent:
+    amount_field: amount
+    merchant_field: merchant_id
+  psp__capture_payment:
+    amount_field: amount
+  psp__refund_payment:
+    amount_field: amount
+
+rules:
+  - id: browse-catalog
+    effect: allow
+    match:
+      tool: "merchant__list_catalog"
+
+  - id: read-checkout
+    effect: allow
+    match:
+      tool: "merchant__get_checkout"
+
+  - id: open-checkout
+    effect: allow
+    match:
+      tool: "merchant__create_checkout"
+
+  - id: authorize-payment
+    effect: allow
+    match:
+      tool: "psp__create_payment_intent"
+    constraints:
+      amount_max: 50.0          # 与 mandate 的 per_txn_max 取交集，只会更紧
+      merchant_in: [m1]
+
+  - id: capture-payment
+    effect: allow
+    match:
+      tool: "psp__capture_payment"
+
+  - id: read-spend-controls
+    effect: allow
+    match:
+      tool: "psp__get_spend_controls"
+
+  - id: complete-checkout
+    effect: allow
+    match:
+      tool: "merchant__complete_checkout"
+
+  # 退款要人批（ADR-0006 / 0021）：不是硬拒，是交给审批闸门
+  - id: refund-needs-human
+    effect: require_approval
+    reason_code: refund_requires_approval
+    match:
+      tool: "merchant__request_refund"
+
+  # 任何没被上面命中的调用都会落到 default deny——包括 psp__refund_payment、
+  # merchant__cancel_checkout 与所有 resources/*。

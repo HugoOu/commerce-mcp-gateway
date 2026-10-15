@@ -17,12 +17,13 @@ W3 你要写的是 `ChainLedger`：全局哈希链 + 运行证据包（JSONL + m
 
 from __future__ import annotations
 
-import hashlib
 import json
 import pathlib
 import time
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
+
+from ..hashing import digest
 
 __all__ = [
     "ChainLedger",
@@ -35,12 +36,6 @@ __all__ = [
 ]
 
 _TODO = "W3 Step 3：证据链与证据包由你实现（AGENTS.md 分工表）"
-
-
-def digest(value: Any) -> str:
-    """规范化摘要：键排序 + 紧凑分隔符（ADR-0014 的透传义务之一）。"""
-    blob = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass(frozen=True)

@@ -46,6 +46,9 @@ class InterceptedRequest:
     arguments: dict[str, Any] = field(default_factory=dict)
     """**未校验**的原始参数——ADR-0014 说的「校验类」，策略从这里读金额与商户。"""
     meta: dict[str, Any] = field(default_factory=dict)
+    now: float | None = None
+    """求值时刻（POSIX 秒）。**由调用方传入**，策略求值因此仍是纯函数（architecture 第 4 条）：
+    不传就不做过期判定，而不是在实现里偷读 `time.time()`。"""
 
 
 @dataclass(frozen=True)
