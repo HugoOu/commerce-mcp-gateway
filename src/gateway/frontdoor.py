@@ -107,11 +107,20 @@ class GatewayMiddleware(ServerMiddleware[Any]):
 
 
 def build_server(enforcer: Enforcer) -> MCPServer:
-    """构造下游 MCP server。拦截点通过构造函数注入，便于测试时替换。"""
+    """构造下游 MCP server。拦截点通过构造函数注入，便于测试时替换。
+
+    `subscriptions=False` 是**必须**的，不是优化：能力广告由 SDK 从**已注册的 handler** 推导，
+    而 `MCPServer` 默认会注册 `subscriptions/listen`——于是网关会广告 `resources.subscribe=true`，
+    承诺一条它根本没实现过滤的推送通道（ADR-0012：「做不到就不声明」；ADR-0024 也提醒过
+    「不要依赖 SDK 默认值」）。关掉它，现代版广告里 `subscribe` 就是 false。
+    （残余缺口：老客户端看的 `resources/subscribe` 仍由 SDK 注册，本版不动 SDK 内部；
+    真调用它会被拦截点按结构性错误拒掉，见 `docs/threat-model.md` T6。）
+    """
     return MCPServer(
         name="commerce-mcp-gateway",
         version="0.2.0",
         instructions=INSTRUCTIONS,
         middleware=[GatewayMiddleware(enforcer)],
+        subscriptions=False,
     )
 

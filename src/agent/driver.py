@@ -243,6 +243,12 @@ async def run_task(config: RunConfig) -> int:
         error = f"{type(exc).__name__}: {exc}"
         print(f"[error] {error}")
     finally:
+        # 关掉模型客户端（`ReplayModel` 没有 aclose，所以用 getattr 兜一下）：
+        # 不关的话，连接池会在事件循环销毁后才被回收，批量跑时打出一堆
+        # `RuntimeError: Event loop is closed`。
+        close = getattr(model, "aclose", None)
+        if close is not None:
+            await close()
         if recorder:
             recorder.write(type="run_end", status=status, steps=steps, tokens=tokens,
                            digest=digest(events), error=error)

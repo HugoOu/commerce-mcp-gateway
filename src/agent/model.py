@@ -110,6 +110,14 @@ class OpenAIModel:
             usage=response.usage.model_dump() if response.usage else {},
         )
 
+    async def aclose(self) -> None:
+        """关掉底层 HTTP 客户端。
+
+        不关的后果是实测出来的：批量跑（`eval/redteam.py`）时每个 `asyncio.run` 结束都会留下
+        `RuntimeError: Event loop is closed`——连接池在事件循环销毁之后才被 GC 回收。
+        """
+        await self._client.close()
+
 
 class ReplayModel:
     """重放实现：按顺序吐出录下来的决策，不打任何 API、不读环境变量。"""
