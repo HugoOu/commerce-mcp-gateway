@@ -25,7 +25,7 @@ from mcp.shared.exceptions import MCPError
 from mcp_types import INVALID_PARAMS, INVALID_REQUEST
 
 from . import telemetry
-from .approval import APPROVAL_KEY, DurableApprovalGate
+from .approval import APPROVAL_KEY, ApprovalChannel, DurableApprovalGate
 from .budget import BudgetExceeded, BudgetLedger, Hold
 from .decision import AuthorizationBasis, Decision, InterceptedRequest
 from .evidence import ChainLedger, EvidenceEntry
@@ -49,6 +49,7 @@ ADAPTIVE_HINTS: dict[str, str] = {
     "mandate_expired": "mandate 已过期",
     "approval_denied": "人工审批拒绝了这次调用",
     "approval_timeout": "等待人工审批超时",
+    "approval_unavailable": "这个客户端没法接受人工审批请求（需要 elicitation 能力或现代版协议）",
 }
 """可自适应层的提示：只说**怎么改**，不回显阈值与规则名（ADR-0007 第 2 层）。"""
 
@@ -149,9 +150,16 @@ class Enforcer:
         basis: AuthorizationBasis,
         request_id: str | int | None = None,
         input_responses: dict[str, Any] | None = None,
+        request_state: str | None = None,
+        approval_channel: ApprovalChannel = "none",
         now: float | None = None,
     ) -> types.CallToolResult | types.InputRequiredResult:
-        """返回 `CallToolResult`；需要人工审批时返回 `InputRequiredResult`（MRTR，ADR-0006）。"""
+        """返回 `CallToolResult`；需要人工审批时返回 `InputRequiredResult`（MRTR，ADR-0006）。
+
+        `approval_channel` 由前门按入站 `_meta` 判（`approval.channel_for`）——执行点不解析
+        `_meta`，它只按「这个客户端能接受哪种通道」办事。默认 `none` 是 **fail-closed**：
+        没人告诉执行点客户端能不能回答，就当不能。
+        """
         moment = time.time() if now is None else now
         seq = next(self._seq)
         request = self._request("tools/call", name, arguments, basis, request_id, moment)
@@ -159,16 +167,18 @@ class Enforcer:
         # ① 判定（含审批闸门）——拒绝在这里就返回，不碰上游、不碰预算
         decision = self._policy.evaluate(request, basis)
         if decision.kind == "require_approval":
-            answer = (input_responses or {}).get(APPROVAL_KEY)
-            if answer is None:
-                # 第一轮：落 durable 待审批记录（ADR-0006），把问题交给客户端
-                pending = self._approval.register(request, decision, basis)
-                self._record(request, "pending", seq=seq, decision="require_approval",
-                             reason_code=decision.reason_code, policy_digest=self._policy.digest)
-                telemetry.annotate(request.method, tool=request.name, decision="require_approval",
-                                   outcome="challenged")
-                return self._approval.challenge(pending, request)
-            decision = self._approval.interpret(answer)
+            outcome = await self._resolve_approval(
+                request,
+                decision,
+                basis,
+                seq=seq,
+                input_responses=input_responses,
+                request_state=request_state,
+                channel=approval_channel,
+            )
+            if isinstance(outcome, types.InputRequiredResult):
+                return outcome
+            decision = outcome
         if decision.kind != "allow":
             return self._deny(request, decision, seq=seq)
 
@@ -223,6 +233,60 @@ class Enforcer:
         telemetry.annotate("tools/call", tool=name, upstream=upstream.alias, decision="allow",
                            outcome=outcome, duration_ms=0.0)
         return sanitized
+
+    async def _resolve_approval(
+        self,
+        request: InterceptedRequest,
+        decision: Decision,
+        basis: AuthorizationBasis,
+        *,
+        seq: int,
+        input_responses: dict[str, Any] | None,
+        request_state: str | None,
+        channel: ApprovalChannel,
+    ) -> Decision | types.InputRequiredResult:
+        """把 `require_approval` 落成一个 `allow` / `deny`，或返回要发回客户端的挑战（ADR-0006）。
+
+        四步，按通道分叉：
+
+        1. 这一轮带了客户端的回答 → 直接判（协议通道的第二轮）；
+        2. 客户端连现代版都不是 → 它读不懂 `input_required`，我们没法向它提问，fail-closed 拒掉；
+        3. 第一轮 → 落 durable 待审批记录：能 elicitation 就给 form 挑战，否则给只带
+           `request_state` 的挑战（兜底通道）；
+        4. 兜底通道的第二轮 → 在**这一次请求里**等文件里的决定（durable wait）。
+
+        为什么第 4 步的等待要放在网关侧？因为 SDK 的 state-only 重试上限是 10 轮、退避
+        50ms→250ms（≈1.3s）——人来不及在 CLI 上敲一条命令。等待预算从**登记时刻**算起
+        （`DurableApprovalGate.remaining`），所以客户端多试几轮也续不了命。
+        """
+        answer = (input_responses or {}).get(APPROVAL_KEY)
+        if answer is not None:
+            return self._approval.interpret(answer)
+
+        if channel == "none":
+            return Decision(kind="deny", reason_code="approval_unavailable")
+
+        pending = self._approval.resume(request_state, request, basis)
+        if pending is None:
+            pending = self._approval.register(request, decision, basis)
+            self._record(request, "pending", seq=seq, decision="require_approval",
+                         reason_code=decision.reason_code, policy_digest=self._policy.digest)
+            telemetry.annotate(request.method, tool=request.name, decision="require_approval",
+                               outcome="challenged")
+            if channel == "form":
+                return self._approval.challenge(pending, request)
+            return self._approval.state_only(pending)
+
+        if channel == "form":
+            # 问过一轮却没带回回答——再问一次（客户端自己的重试上限会兜住死循环）
+            return self._approval.challenge(pending, request)
+
+        verdict = await self._approval.wait(
+            pending.approval_id, timeout=self._approval.remaining(pending)
+        )
+        if verdict is None:
+            return Decision(kind="deny", reason_code="approval_timeout")
+        return verdict
 
     # ------------------------------------------------------------------ 资源
 

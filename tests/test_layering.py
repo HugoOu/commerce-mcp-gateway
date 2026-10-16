@@ -55,6 +55,7 @@ def test_gateway_modules_import():
         "gateway.enforce",
         "gateway.frontdoor",
         "gateway.app",
+        "gateway.cli",
     ):
         importlib.import_module(name)
 

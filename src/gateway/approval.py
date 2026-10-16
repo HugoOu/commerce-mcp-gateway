@@ -6,12 +6,17 @@
 2. **绑定身份与动作**（ADR-0021）：每条待审批都带 `subject` 与 `action_digest`，
    批准只对**那一个动作**有效——不做全局「批准」开关。
 
-两条通道，同一个闸门：
+三条通道，同一个闸门（走哪条由 `channel_for()` 从入站 `_meta` 判）：
 
-- **协议通道（主）**：网关返回 `input_required`，客户端把回答带回 `params["inputResponses"]`；
-  形状是实测出来的，见 `docs/w3-plan.md` 的「Step 4 的 MRTR 验证」小节。
-- **文件 / CLI 通道（兜底）**：`scripts/approve.py` 往同一个 JSONL 追加决定，闸门轮询它；
-  客户端不支持 elicitation 时用这条，超时即拒绝（`approval_timeout`）。
+- **协议通道（主）**：客户端注册了 elicitation 回调 → 网关返回带 `input_requests` 的
+  `InputRequiredResult`（form 模式，ADR-0021），回答落在 `params["inputResponses"]`；
+- **协议通道的兜底形态**：客户端**没有** elicitation 回调 → 返回**只带 `request_state`** 的
+  `InputRequiredResult`，客户端退避重试，网关在**第二轮**里等文件里的决定。为什么不在每一轮
+  都立刻返回？因为 SDK 的重试上限是 10 轮、退避 50ms→250ms（≈1.3s），人来不及在 CLI 上敲一条
+  命令——所以等待必须发生在网关这一侧，这正是 durable wait 的含义；
+- **文件 / CLI 通道**：`python -m gateway approve <id>` 往同一个 JSONL 追加决定。
+
+三条通道写的是**同一个** JSONL、同一种形状——CLI 看到的和客户端批准的一定是同一件事。
 """
 
 from __future__ import annotations
@@ -22,17 +27,29 @@ import pathlib
 import time
 import uuid
 from dataclasses import asdict, dataclass, fields
-from typing import Protocol
+from typing import Any, Literal
 
 import mcp_types as types
 
 from .decision import AuthorizationBasis, Decision, InterceptedRequest
 from .hashing import digest
 
-__all__ = ["APPROVAL_KEY", "ApprovalGate", "DenyAllGate", "DurableApprovalGate", "PendingApproval"]
+__all__ = [
+    "APPROVAL_KEY",
+    "MODERN_ERA",
+    "ApprovalChannel",
+    "DurableApprovalGate",
+    "PendingApproval",
+    "channel_for",
+]
 
 APPROVAL_KEY = "approve"
-"""挑战与回答共用的键：网关用它在 `inputRequests` 里提问，也从 `inputResponses` 里取回答。"""
+"""挑战与回答共用的键：网关用它在 `input_requests` 里提问，也从 `inputResponses` 里取回答。"""
+
+MODERN_ERA = "2026-07-28"
+"""现代版协议（ADR-0024）：`input_required` / MRTR 从这一版起才有。"""
+
+ApprovalChannel = Literal["form", "cli", "none"]
 
 
 @dataclass(frozen=True)
@@ -45,28 +62,53 @@ class PendingApproval:
     created_at: float
 
 
-class ApprovalGate(Protocol):
-    async def request(
-        self, request: InterceptedRequest, decision: Decision, basis: AuthorizationBasis
-    ) -> Decision: ...
+def channel_for(meta: dict[str, Any] | None) -> ApprovalChannel:
+    """这个客户端能接受哪种审批通道。
+
+    形状是实测的（`docs/w3-plan.md` 的 MRTR 小节）：`_meta` 里的
+    `io.modelcontextprotocol/clientCapabilities` **只在真的注册了回调时才出现**
+    （`ClientSession._build_capabilities`：回调是默认值就广告 `None`），
+    所以「广告了 elicitation」是可信的能力信号，不是猜测。
+
+    顺序是刻意的，两处都是 fail-closed：
+
+    1. **先看协议时代**——老客户端读不懂 `input_required`，问它等于发一个它解析不了的结果；
+    2. 再看 elicitation——没有就退到兜底通道（`cli`），而不是放弃审批。
+
+    版本号是 `YYYY-MM-DD`，字典序即时间序，所以直接比字符串。
+    """
+    if not isinstance(meta, dict):
+        return "none"
+    version = meta.get("io.modelcontextprotocol/protocolVersion")
+    if not isinstance(version, str) or version < MODERN_ERA:
+        return "none"
+    capabilities = meta.get("io.modelcontextprotocol/clientCapabilities")
+    if isinstance(capabilities, dict) and capabilities.get("elicitation"):
+        return "form"
+    return "cli"
 
 
-class DenyAllGate:
-    """没有人批准就拒绝。测试与「无审批通道」时的默认值。"""
+def _action_digest(request: InterceptedRequest) -> str:
+    """动作指纹：方法 + 工具名 + 参数（ADR-0021 要求批准绑定到具体动作）。"""
+    return digest({"method": request.method, "name": request.name, "arguments": request.arguments})
 
-    async def request(
-        self, request: InterceptedRequest, decision: Decision, basis: AuthorizationBasis
-    ) -> Decision:
-        return Decision(kind="deny", reason_code="approval_unavailable")
+
+def _pending_from_row(row: dict[str, Any]) -> PendingApproval:
+    """还原一条待审批——只取数据类认识的字段（记录里还带 `kind`）。"""
+    known = {field.name for field in fields(PendingApproval)}
+    return PendingApproval(**{key: value for key, value in row.items() if key in known})
 
 
 class DurableApprovalGate:
     """durable 审批闸门：`pending` 与 `decision` 两类记录写同一个 JSONL（ADR-0006 的 durable wait）。
 
-    `scripts/approve.py` 负责把决定追加进去——这就是 ADR-0006 说的 CLI 投递通道。
+    幂等：同一个（动作指纹, 主体）在**未决定**期间只有一条待审批——客户端重试与并发的第二轮
+    不会在 CLI 里刷出一串重复条目。已决定的不复用（ADR-0021 的「单次使用」）。
     """
 
-    def __init__(self, path: pathlib.Path, *, timeout_seconds: float = 60.0, poll_seconds: float = 0.2) -> None:
+    def __init__(
+        self, path: pathlib.Path, *, timeout_seconds: float = 60.0, poll_seconds: float = 0.2
+    ) -> None:
         self.path = path
         self.timeout_seconds = timeout_seconds
         self.poll_seconds = poll_seconds
@@ -78,24 +120,53 @@ class DurableApprovalGate:
     def register(
         self, request: InterceptedRequest, decision: Decision, basis: AuthorizationBasis
     ) -> PendingApproval:
-        """落一条 durable 待审批记录。绑定身份与动作（ADR-0021）：批准只对**那一个动作**有效。"""
+        """落一条 durable 待审批记录（幂等）。绑定身份与动作（ADR-0021）。"""
+        action_digest = _action_digest(request)
+        for item in self.pending():
+            if item.action_digest == action_digest and item.subject == basis.subject:
+                return item
         pending = PendingApproval(
             approval_id=f"apr_{uuid.uuid4().hex[:10]}",
             subject=basis.subject,
             action=f"{request.method} {request.name or ''}".strip(),
-            action_digest=digest({"method": request.method, "name": request.name, "arguments": request.arguments}),
+            action_digest=action_digest,
             reason_code=decision.reason_code,
             created_at=round(time.time(), 3),
         )
         self._append({"kind": "pending", **asdict(pending)})
         print(
             f"[approval] 待审批 {pending.approval_id}：{pending.action}（{pending.reason_code}）——"
-            f"`uv run python scripts/approve.py list` 查看，`approve {pending.approval_id}` 批准"
+            f"`uv run python -m gateway approvals` 查看，`approve {pending.approval_id}` 批准"
         )
         return pending
 
-    def challenge(self, pending: PendingApproval, request: InterceptedRequest) -> types.InputRequiredResult:
-        """把问题交给客户端。`request_state` 承载 `approval_id`——它是客户端回传的不透明句柄。"""
+    def resume(
+        self,
+        request_state: str | None,
+        request: InterceptedRequest,
+        basis: AuthorizationBasis,
+    ) -> PendingApproval | None:
+        """按客户端回传的 `request_state` 找回待审批。
+
+        `request_state` 是**客户端给的**，规格只说「原样回传」——所以必须核对动作指纹与主体
+        （ADR-0021 的绑定要求），对不上就当没这回事，重新登记。否则一个恶意客户端可以拿着
+        别人的 `request_state` 把自己的调用接到别人批准过的动作上。
+        """
+        if not request_state:
+            return None
+        for row in self._rows():
+            if row.get("kind") != "pending" or row.get("approval_id") != request_state:
+                continue
+            item = _pending_from_row(row)
+            if item.action_digest == _action_digest(request) and item.subject == basis.subject:
+                return item
+            return None
+        return None
+
+    def challenge(
+        self, pending: PendingApproval, request: InterceptedRequest
+    ) -> types.InputRequiredResult:
+        """把问题交给客户端（form 模式）。`request_state` 承载 `approval_id`——客户端回传的句柄。"""
         return types.InputRequiredResult(
             input_requests={
                 APPROVAL_KEY: types.ElicitRequest(
@@ -112,6 +183,14 @@ class DurableApprovalGate:
             request_state=pending.approval_id,
         )
 
+    def state_only(self, pending: PendingApproval) -> types.InputRequiredResult:
+        """只带 `request_state` 的挑战（兜底通道）：客户端不能 elicitation，问题只能出在带外。
+
+        规格要求两者至少有一个，所以「只有 `request_state`」是合法形状。客户端会退避重试，
+        网关在下一轮里等文件里的决定。
+        """
+        return types.InputRequiredResult(request_state=pending.approval_id)
+
     def interpret(self, answer: dict) -> Decision:
         """读客户端的回答：`accept` 且 `approve=True` 才放行，其余一律拒（fail-closed）。"""
         if answer.get("action") == "accept" and (answer.get("content") or {}).get("approve") is True:
@@ -121,38 +200,68 @@ class DurableApprovalGate:
     # ------------------------------------------------------------------ 文件 / CLI 通道（兜底）
 
     def pending(self) -> list[PendingApproval]:
-        """还没被决定的待审批（`scripts/approve.py list` 用它）。"""
+        """还没被决定的待审批（`python -m gateway approvals` 用它）。"""
         rows = self._rows()
         decided = {row["approval_id"] for row in rows if row.get("kind") == "decision"}
-        known = {field.name for field in fields(PendingApproval)}
         return [
-            PendingApproval(**{key: value for key, value in row.items() if key in known})
+            _pending_from_row(row)
             for row in rows
             if row.get("kind") == "pending" and row["approval_id"] not in decided
         ]
 
-    async def request(
-        self, request: InterceptedRequest, decision: Decision, basis: AuthorizationBasis
-    ) -> Decision:
-        # 落盘与协议通道共用 `register()`：两条通道必须记录同一个形状，
-        # 否则 CLI 看到的和客户端批准的可能对不上。
-        pending = self.register(request, decision, basis)
+    def decision_for(self, approval_id: str) -> Decision | None:
+        """文件里已经给出的决定；还没给就返回 `None`。"""
+        for row in self._rows():
+            if row.get("kind") != "decision" or row.get("approval_id") != approval_id:
+                continue
+            if row.get("approved"):
+                return Decision(kind="allow")
+            return Decision(kind="deny", reason_code="approval_denied")
+        return None
 
+    def decide(self, approval_id: str, *, approved: bool) -> None:
+        """投递一条决定——这就是 ADR-0006 的 CLI 通道（`python -m gateway approve <id>`）。
+
+        写在闸门里而不是命令行里：决定的**形状**只有一处定义，CLI 与闸门就不会对不上。
+        """
+        self._append(
+            {
+                "kind": "decision",
+                "approval_id": approval_id,
+                "approved": approved,
+                "decided_at": round(time.time(), 3),
+            }
+        )
+    async def wait(self, approval_id: str, *, timeout: float) -> Decision | None:
+        """等文件里出现决定——**durable wait 就落在这一句**。超时返回 `None`，由调用方拒掉。"""
         waited = 0.0
-        while waited < self.timeout_seconds:
+        while True:
+            verdict = self.decision_for(approval_id)
+            if verdict is not None:
+                return verdict
+            if waited >= timeout:
+                return None
             await asyncio.sleep(self.poll_seconds)
             waited += self.poll_seconds
-            for row in self._rows():
-                if row.get("kind") == "decision" and row.get("approval_id") == pending.approval_id:
-                    if row.get("approved"):
-                        return Decision(kind="allow")
-                    return Decision(kind="deny", reason_code="approval_denied")
-        return Decision(kind="deny", reason_code="approval_timeout")
+
+    def remaining(self, pending: PendingApproval, *, now: float | None = None) -> float:
+        """这条待审批还剩多少等待预算（`created_at + timeout`；过期即 0）。
+
+        等待预算从**登记时刻**算起，不是从这一轮请求算起——否则客户端每重试一次就能续一次命。
+        """
+        moment = time.time() if now is None else now
+        return max(0.0, pending.created_at + self.timeout_seconds - moment)
+
+    # ------------------------------------------------------------------ 存储
 
     def _rows(self) -> list[dict]:
         if not self.path.exists():
             return []
-        return [json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return [
+            json.loads(line)
+            for line in self.path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
 
     def _append(self, row: dict) -> None:
         with self.path.open("a", encoding="utf-8") as handle:

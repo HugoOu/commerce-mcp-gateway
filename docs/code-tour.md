@@ -20,7 +20,7 @@
 - **三处最容易追问的点**：① `segment_glob` 为什么 `merchant__*` **不**跨段（ADR-0001：语言止步于 glob）；② 为什么是「最严者胜」而不是「任何 allow 命中就放行」（非补偿性门，见 `docs/evaluation.md`）；③ 为什么策略约束与 mandate 约束是**取交集**（ADR-0020：策略只能收紧授权）。
 - **自测**：① 参数里写 `"amount": "9.71"`（字符串）会怎样，为什么？② 策略文件里多写一个字段会怎样，为什么这样设计？③ `merchant__**` 与 `merchant__*` 的区别是什么？④ 没有传 `now` 时，过期判定会怎样？
 
-## 3. `src/gateway/budget/` —— 预算原子扣减（待填）
+## 3. `src/gateway/budget/` —— 预算原子扣减
 
 - **读什么**：整个模块就在 `__init__.py` 里（类型与实现放一起，因为账本只做这一件事）。顺序：`SCHEMA`（表结构与那条 `UNIQUE`）→ `reserve`（条件更新与幂等）→ `commit` / `release`（终结与幂等）→ `balance` / `reclaim_expired` → 内部工具 `_transaction` / `_used_cents`。
 - **为什么这样切**：
@@ -31,7 +31,7 @@
   - **`now` 由调用方传入**：实现里不读时钟，重放才可复算（architecture 第 4 条）。
 - **自测**：① 为什么 `reserve` 失败时必须「不留下半条 hold」？② 同一幂等键重试时返回的是哪一条 hold，为什么这样设计？③ 释放过的 hold 还占额度吗？④ 50 个线程抢 100 元上限、每笔 30 元，应该有几笔成功，为什么是「恰好」而不是「最多」？⑤ 为什么重复 `commit` 要幂等，而 `commit` 之后再 `release` 要拒绝？
 
-## 4. `src/gateway/evidence/` —— 证据链与证据包（待填）
+## 4. `src/gateway/evidence/` —— 证据链与证据包
 
 - **读什么**：`EvidenceEntry`（链上的单元）→ `_entry_hash` / `_merkle_root`（两个哈希怎么算）→ `ChainLedger.record_pending` / `record_done`（写入顺序）→ `verify`（能检出什么）→ `replay`（前置条件与决策重构）。
 - **为什么这样切**：
@@ -42,7 +42,7 @@
   - **诚实边界**：把链与全部 manifest 一起重写的对手检不出（那需要外部锚点或见证，威胁模型 R5 本版未采纳）。
 - **自测**：① 为什么短摘要（16 位十六进制）不能拿来做链？② 删掉运行包的最后一条，`verify` 靠什么发现？③ 只删链的最后一条，为什么 `verify()` 也能发现？④ 重放前置条件里为什么需要 `policy_digest` 与预算前后？⑤ 「verify 通过」保证了什么、又没保证什么？
 
-## 5. `src/gateway/enforce.py` —— 执行点（待填，W3 Step 4）
+## 5. `src/gateway/enforce.py` —— 执行点
 
 - **读什么**：模块 docstring 里的链路（`authorize → decide → enforce → record_pending → forward → sanitize → settle → record_done`）→ `call_tool`（把链路按顺序读一遍，每一步都有注释）→ `_deny`（ADR-0007 的三层形态）→ `_reserve` / `_used`（预算）→ `_record`（证据字段从哪来）→ `read_resource`（ADR-0023 的同形拒绝）。
 - **为什么这样切**：
@@ -50,9 +50,21 @@
   - **`record_pending` 在转发之前**（ADR-0022）：崩溃也一定留下「有一条 Decision 授权过它」；
   - **拒绝是「返回结果」不是「抛异常」**（ADR-0007 第 2 层）：抛异常会变成协议错误，客户端库可能直接掐掉整个回合——那是一次廉价的 DoS；
   - **`_reserve` 在有金额时才动手**，且没有 mandate 就直接拒（fail-closed），而不是「没约束就放行」；
-  - **审批第一轮返回 `InputRequiredResult`**（MRTR），第二轮从 `input_responses` 读回答——重试会重跑整条链，但 `tool_call_id` 是内容摘要派生的，`reserve` 命中同一个 hold，不会重复占额度。
-- **自测**：① 为什么未知工具是**协议错误**而策略拒绝不是？② `decision=allow` 与 `outcome=tool_error` 为什么能同时出现？③ 被拒的调用为什么要在链上留痕？④ 审批重试那一轮为什么不会重复扣款？⑤ `read_resource` 为什么对「越界」和「不存在」回同一个答案？
+  - **审批第一轮返回 `InputRequiredResult`**（MRTR），第二轮从 `input_responses` 读回答——重试会重跑整条链，但 `tool_call_id` 是内容摘要派生的，`reserve` 命中同一个 hold，不会重复占额度；
+  - **审批的三条通道在 `_resolve_approval` 里分叉**（W4 Step 1.2）：带回答 → 直接判；老客户端 → `approval_unavailable`；第一轮 → 挑战（能 elicitation 走 form，否则只给 `request_state`）；兜底通道的第二轮 → **在网关侧等文件里的决定**。为什么等待不能交给客户端重试？因为 SDK 的 state-only 重试上限是 10 轮、退避 50ms→250ms（≈1.3s），人来不及敲一条 CLI 命令。
+- **自测**：① 为什么未知工具是**协议错误**而策略拒绝不是？② `decision=allow` 与 `outcome=tool_error` 为什么能同时出现？③ 被拒的调用为什么要在链上留痕？④ 审批重试那一轮为什么不会重复扣款？⑤ `read_resource` 为什么对「越界」和「不存在」回同一个答案？⑥ 审批的等待预算为什么从**登记时刻**算起，而不是从每一轮请求算起？
 
-## 6. `src/gateway/frontdoor.py` + `upstream.py` —— 前后门（待填）
+## 6. `src/gateway/frontdoor.py` + `upstream.py` —— 前后门
 
 > 每填一节，都要有「读什么 / 为什么这样切 / 自测」三块，与上面两节保持同一格式。
+
+## 7. `src/gateway/approval.py` + `cli.py` —— 审批闸门与命令行
+
+- **读什么**：`channel_for`（协议事实 → 通道名，两处 fail-closed）→ `register` / `resume`（幂等与绑定校验）→ `challenge` / `state_only`（两种挑战形状）→ `wait`（durable wait 的那一句）→ `cli.py` 的 `serve` / `chain` / `verify` / `replay` / `approvals` / `approve` / `deny`。
+- **为什么这样切**：
+  - **三条通道写同一个 JSONL**：CLI 看到的和客户端批准的一定是同一件事——形状只有一处定义（`_append`）；
+  - **`request_state` 是客户端给的，必须校验**：规格只说「原样回传」，没说不可伪造；对不上动作指纹或主体就当作没这回事（ADR-0021 的绑定要求）；
+  - **幂等登记**：同一（动作指纹, 主体）在未决定期间只有一条，客户端重试不会把 CLI 刷屏；已决定的不复用（单次使用）；
+  - **调试客户端不放 `src/gateway/`**：`tools` / `call` / `read` 要当 MCP 客户端，而 `src/gateway/` 里只允许 `upstream.py` 持有 `mcp.client`（I1 的结构契约）——所以它们留在 `scripts/play.py`；
+  - **argparse 的经典坑**：子解析器会把自己那份默认值写回 namespace，所以 `shared_flags()` 用 `SUPPRESS`——否则 `--psp-mode decline serve` 会被静默改回默认值。
+- **自测**：① 为什么「老客户端 + elicitation 广告」也只能拒？② `state_only` 挑战为什么是合法形状？③ 伪造 `request_state` 能造成什么？④ 为什么审计入口（`verify` / `replay`）该是产品的一部分，而调试客户端不是？

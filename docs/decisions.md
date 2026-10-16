@@ -69,7 +69,7 @@
 - 为什么不选 b：stdio 不便于多客户端与独立观测。
 - 决策（已定，2026-10-14）：采纳推荐方案——对 agent 暴露 Streamable HTTP，对 mock 用 stdio。
 
-## ADR-0005 SDK 代理能力与转发实现方式（候选，含调研与推荐，待你决策）
+## ADR-0005 SDK 代理能力与转发实现方式（已采纳，2026-10-15）
 
 - 背景：网关需要把请求转发到上游 MCP server，同时在下游做拦截与合成。SDK 没有内置代理（2026-10-04 已核实），所以要分别决定「转发」与「拦截」用什么机制。
 
@@ -131,6 +131,12 @@
 - 为什么不选 a：纯协议原生依赖客户端支持 elicitation / mrtr，通用性差。
 - 为什么不选 b：纯自造通道不可被通用 MCP 客户端使用，且无法复用协议的状态语义。
 - 注：会触及先验架构，按 AGENTS.md 需要证据 + User 认可。
+- 补充（2026-10-16，W4 Step 1.2 落地）：**通道选择由入站 `_meta` 判**，三档且两处 fail-closed——
+  - 老客户端（非现代版，或没有版本号）→ `approval_unavailable`：它读不懂 `input_required`，问它等于发一个它解析不了的结果；
+  - 现代版 + 广告了 `elicitation` → form 模式 challenge（主通道）；
+  - 现代版 + 没广告 → 返回**只带 `request_state`** 的 `InputRequiredResult`，客户端退避重试，网关在**第二轮里**等文件里的决定。
+  两条实测依据：① SDK **只在真的注册了回调时**才广告 elicitation 能力（`ClientSession._build_capabilities`），所以能力广告可信；② state-only 重试上限是 10 轮、退避 50ms→250ms（≈1.3s），人来不及敲 CLI 命令——所以**等待必须放在网关侧**，等待预算从登记时刻算起。
+  另外收紧两处：`request_state` 由客户端回传，必须核对**动作指纹 + 主体**（ADR-0021 的绑定要求）；`register()` 幂等、已决定的不复用（单次使用）。
 
 ## ADR-0007 策略拒绝的返回形态（已采纳，2026-10-10）
 
@@ -397,7 +403,7 @@
 - 为什么不选 b：忽略授权等于把令牌当装饰，T4 又失去意义。
 - 为什么不选 c：**策略永远不能放宽授权**，否则一次错误配置就能把权限放大——这与「不可信 hint 只能收紧」是同一条原则。
 - 决策（已定，2026-10-15）：采纳推荐方案——`scope 允许 ∩ policy 允许` 才放行；任一层未知即 deny（fail-closed）；两层各自产出 `reason_code`；`Decision` 增加 `decided_by` 标注。
-## ADR-0021 审批与敏感信息的通道选择（候选，含证据链，待你决策）
+## ADR-0021 审批与敏感信息的通道选择（已采纳，2026-10-15）
 
 - 背景：ADR-0006 定了审批走协议原生，但没定「用 form 还是 URL 模式」；而规格对敏感信息有硬性要求。
 - 证据（client/elicitation 原文，2026-10-15 核实）：
@@ -452,7 +458,7 @@
 - 决策（已定，2026-10-15）：采纳推荐方案——定位锁为「面向 agentic commerce / pay 的受控执行与验证控制面」；按借鉴清单执行（借鉴短路拒绝、audit-first 顺序、自陈局限、三层防御；不借鉴 Lens 广度、上下文预注入、关键词 SQL 守卫、短生命周期 stdio）；并采纳架构补充（证据拆成 `record_pending` / `record_done`，见 `architecture.md`）。
 - 证据补充（2026-10-15，你已认可）：与 CaMeL 的 capability、AP2 的 mandate 的同源对照记入上文证据。对外叙事里可以直接说「策略语言边界不是拍脑袋定的，而是与 capability 和 mandate 对齐」——**决策本身不变**，只是证据与讲法变厚。
 
-## ADR-0023 resources 面的拒绝形态（候选，含证据链与推荐，待你决策）
+## ADR-0023 resources 面的拒绝形态（已采纳，2026-10-15）
 
 - 背景：ADR-0011 把拦截面扩到 `resources/*`，ADR-0007 定了 `tools/call` 的三层形态。但 `resources/read` 的结果类型里**没有 `isError` 字段**——协议给 tools 留了「带载荷的失败」通道，没给 resources 留。所以「策略拒绝一次 resource 读取」该长什么样，是 ADR-0007 没覆盖的缺口。
 - 证据一：SDK 2.3.0 的错误面（2026-10-15 读源码）：
@@ -474,7 +480,7 @@
 - 决策（已定，2026-10-15）：采纳推荐方案——`resources/list` 按调用方授权过滤（规格明确允许，游标重签见 ADR-0013）；对从未在 list 里出现过的 URI，`resources/read` 回 `-32602` + `"Resource not found"` + `data.uri`，**不带** `reason_code`，与「不存在」完全同形；完整理由（命中策略、mandate、policy 版本）只进证据账本；备选 b、c 与「纯 a」均不采纳。
 - 依据：本页证据一（SDK 与规格的错误面）、证据二（`resources/list` 可按授权变化）、证据三（同类实现均未做资源级过滤）、证据四（RFC 9110 的 404 先例）。
 
-## ADR-0024 agent 边的协议时代（候选，含实测证据与推荐，待你决策）
+## ADR-0024 agent 边的协议时代（已采纳，2026-10-15）
 
 - 背景：ADR-0018 定了「逐边协商 + `server/discover` + 不翻译」，但没定 **agent 边用哪个时代**。W1 的 hello 只跑通握手版（`2025-11-25`）——那是因为当时的探针用裸 `ClientSession` 直接走 initialize；W2 的 Step 0 实测发现，**时代是客户端的选择**，而三个已采纳决策都依赖现代版词汇。
 - 实测（2026-10-15，`scripts/probe_era.py`，SDK 2.3.0）：
@@ -496,7 +502,7 @@
 - 决策（已定，2026-10-15）：采纳推荐方案——**agent 边优先现代版**（`2026-07-28`）；网关作为 server 端同时服务两代（`serve_dual_era_loop`），但对外文档、演示与评测以现代版为准；driver 用 `mode="auto"`，**不 pin 版本**；能力广告按 ADR-0012 显式设置，不依赖 SDK 默认值。（附：残留的 8000 端口进程已于 2026-10-15 清理，`Stop-Process -Id 15988`，复查监听数为 0。）
 - 依据：本页实测表（`scripts/probe_era.py`，2026-10-15）+ 源码位置（`mcp/server/connection.py:161`、`mcp/client/caching.py:341`、`mcp_types/methods.py:411`）。
 
-## ADR-0025 Step 2 驱动与模型客户端：复用现成 harness 还是自写（候选，含调研与推荐，待你决策）
+## ADR-0025 Step 2 驱动与模型客户端：复用现成 harness 还是自写（已采纳，2026-10-15）
 
 - 背景：Step 2 要写薄循环 driver + record&replay。你问：能不能直接套 `mini-swe-agent`，或简单改改就用，或换别的简单 harness；模型客户端能不能直接用 LiteLLM。ADR-0016 已定「自写薄循环」，所以这条 ADR 要回答的是**有没有证据支持推翻它**。
 - 证据（2026-10-15 调研 + 本地源码）：

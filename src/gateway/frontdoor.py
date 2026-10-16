@@ -1,6 +1,8 @@
 """前门：对 agent 暴露的 MCP server（Streamable HTTP，ADR-0004）——AI 起草，见 ADR-0026。
 
-ADR-0005 的分工：这里只做「取身份 → 把请求交给执行点 → 返回结果」，一行决策逻辑都没有。
+ADR-0005 的分工：这里只做「取身份 + 读客户端的协议能力 → 把请求交给执行点 → 返回结果」，
+策略、预算与审批的**决策**逻辑一行都没有（包括「这个客户端能接受哪种审批通道」——这里只把
+协议事实翻成一个通道名，怎么用它由执行点决定）。
 工具清单与调用都由 middleware 短路提供，所以这里不注册任何工具；能力广告由 SDK 从已注册的
 handler 推导（`tools/list`、`tools/call` 总是注册的），不受影响。
 """
@@ -14,6 +16,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.shared.exceptions import MCPError
 from mcp_types import INVALID_PARAMS
 
+from .approval import channel_for
 from .enforce import Enforcer
 
 INSTRUCTIONS = (
@@ -31,6 +34,13 @@ def _bearer_token(ctx: Any) -> str | None:
     if value.lower().startswith("bearer "):
         return value[7:].strip()
     return value or None
+
+
+def _meta(ctx: Any) -> dict[str, Any] | None:
+    """入站 `_meta`。实测（`docs/w3-plan.md` 的 MRTR 小节）：中间件看到的 `ctx.meta` 是
+    **普通 dict**（不是模型），键形如 `io.modelcontextprotocol/protocolVersion`。"""
+    meta = getattr(ctx, "meta", None)
+    return meta if isinstance(meta, dict) else None
 
 
 class GatewayMiddleware(ServerMiddleware[Any]):
@@ -62,7 +72,10 @@ class GatewayMiddleware(ServerMiddleware[Any]):
                 basis=basis,
                 request_id=ctx.request_id,
                 # MRTR 的回答与 `_meta` **平级**（实测），所以从 `params` 取，不从 `ctx.meta` 取
-                input_responses=(ctx.params or {}).get("inputResponses"),
+                input_responses=params.get("inputResponses"),
+                request_state=params.get("requestState"),
+                # 通道是**协议事实**，不是策略判断：客户端广告了 elicitation 才能走 form（ADR-0021）
+                approval_channel=channel_for(_meta(ctx)),
             )
         if method == "resources/read":
             params = ctx.params or {}
