@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="505" viewBox="0 0 880 505" font-family="Microsoft YaHei, Segoe UI, sans-serif">
+  <rect width="880" height="505" fill="#ffffff"/>
+
+  <text x="40" y="34" font-size="17" font-weight="600" fill="#111827">鲁棒性曲线：注入成功率 vs 筛查强度</text>
+  <text x="40" y="54" font-size="12.5" fill="#6b7280">示意形状，**尚未实测**——三条线代表三档载荷，不是跑出来的数字</text>
+
+  <!-- 网格与 Y 轴刻度 -->
+  <g stroke="#e5e7eb" stroke-width="1">
+    <line x1="90" y1="390" x2="820" y2="390"/>
+    <line x1="90" y1="307.5" x2="820" y2="307.5"/>
+    <line x1="90" y1="225" x2="820" y2="225"/>
+    <line x1="90" y1="142.5" x2="820" y2="142.5"/>
+    <line x1="90" y1="60" x2="820" y2="60"/>
+  </g>
+  <g font-size="12" fill="#6b7280" text-anchor="end">
+    <text x="80" y="394">0%</text>
+    <text x="80" y="311.5">25%</text>
+    <text x="80" y="229">50%</text>
+    <text x="80" y="146.5">75%</text>
+    <text x="80" y="64">100%</text>
+  </g>
+
+  <!-- 坐标轴 -->
+  <line x1="90" y1="60" x2="90" y2="390" stroke="#9ca3af" stroke-width="1.5"/>
+  <line x1="90" y1="390" x2="820" y2="390" stroke="#9ca3af" stroke-width="1.5"/>
+  <text x="24" y="225" font-size="12.5" fill="#374151" transform="rotate(-90 24 225)" text-anchor="middle">注入成功率 = 该档被执行的运行数 / N</text>
+
+  <!-- X 轴刻度 -->
+  <g stroke="#9ca3af" stroke-width="1">
+    <line x1="212" y1="390" x2="212" y2="395"/>
+    <line x1="455" y1="390" x2="455" y2="395"/>
+    <line x1="698" y1="390" x2="698" y2="395"/>
+  </g>
+  <g font-size="12.5" fill="#374151" text-anchor="middle">
+    <text x="212" y="413">关闭</text>
+    <text x="455" y="413">只标记</text>
+    <text x="698" y="413">标记 + 遮盖</text>
+  </g>
+  <text x="455" y="436" font-size="12.5" fill="#374151" text-anchor="middle">筛查强度（sanitize 的三档）</text>
+
+  <!-- r1 教科书式：平在 0 -->
+  <polyline points="212,390 455,390 698,390" fill="none" stroke="#9ca3af" stroke-width="2.5" stroke-dasharray="6 4"/>
+  <g fill="#9ca3af">
+    <circle cx="212" cy="390" r="4"/><circle cx="455" cy="390" r="4"/><circle cx="698" cy="390" r="4"/>
+  </g>
+
+  <!-- r2 商户政策式：缓升 -->
+  <polyline points="212,390 455,357 698,307.5" fill="none" stroke="#f59e0b" stroke-width="2.5"/>
+  <g fill="#f59e0b">
+    <circle cx="212" cy="390" r="4"/><circle cx="455" cy="357" r="4"/><circle cx="698" cy="307.5" r="4"/>
+  </g>
+  <text x="706" y="303" font-size="12" fill="#b45309">≈25%</text>
+
+  <!-- r3 前置任务式：陡升 -->
+  <polyline points="212,390 455,274.5 698,159" fill="none" stroke="#dc2626" stroke-width="2.5"/>
+  <g fill="#dc2626">
+    <circle cx="212" cy="390" r="4"/><circle cx="455" cy="274.5" r="4"/><circle cx="698" cy="159" r="4"/>
+  </g>
+  <text x="706" y="155" font-size="12" fill="#b91c1c">≈70%</text>
+  <text x="461" y="270" font-size="12" fill="#b91c1c">≈35%</text>
+
+  <!-- 图例 -->
+  <g font-size="12.5" fill="#374151">
+    <line x1="560" y1="86" x2="592" y2="86" stroke="#9ca3af" stroke-width="2.5" stroke-dasharray="6 4"/>
+    <text x="600" y="90">r1 教科书式（现有载荷，实测 0）</text>
+    <line x1="560" y1="108" x2="592" y2="108" stroke="#f59e0b" stroke-width="2.5"/>
+    <text x="600" y="112">r2 商户政策式</text>
+    <line x1="560" y1="130" x2="592" y2="130" stroke="#dc2626" stroke-width="2.5"/>
+    <text x="600" y="134">r3 前置任务式（结构伪装 + 任务前置化）</text>
+  </g>
+
+  <!-- 结论框 -->
+  <rect x="90" y="448" width="730" height="1" fill="#e5e7eb"/>
+  <text x="90" y="466" font-size="12" fill="#6b7280">读法：横轴越往右越强筛查，纵轴越低越好。**要看的不是哪条线高，而是每条线的斜率**——</text>
+  <text x="90" y="483" font-size="12" fill="#6b7280">斜率 = 筛查强度的边际收益；r1 平在 0 说明它测不出东西（这正是我们要换载荷的理由）。</text>
+</svg>
+
