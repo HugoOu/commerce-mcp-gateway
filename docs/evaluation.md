@@ -19,7 +19,7 @@
 | 声称 | 需要的记录 | 指标 | 判定口径 |
 | --- | --- | --- | --- |
 | I1 不存在未判定放行 | 每次被拦截调用一条 Decision | 无 Decision 的调用数 = 0 | 插桩计数进入执行点的调用；统计「被转发但没有 Decision 记录」的次数；由 import-linter 分层契约 + 运行时断言双重保证 |
-| I2 预算不超支 | hold 与 commit / release 记录 | 超支事件 = 0；hold 泄漏率 | 超支事件 = 任一时刻 `sum(committed) + sum(active holds) > limit` 的观测次数；泄漏率 = 超过 TTL 仍未 commit / release 的 hold 比例 |
+| I2 预算不超支 | hold 与 commit / release 记录 | 超支事件 = 0；hold 泄漏率 | 超支事件 = 任一时刻 `sum(committed) + sum(active holds) > limit` 的观测次数；泄漏率 = 超过 TTL 仍未 commit / release 的 hold 比例。**ADR-0027 之后占额度的是「捕获」**——授权只是 hold、不进账，所以「恰好一次」的分母是捕获次数，不是支付类调用次数 |
 | I3 证据防篡改 | 哈希链 + Merkle 根 | 篡改后 `verify` 失败率 = 100% | 对每个证据包随机翻转 1 字节，`verify` 必须失败；同时未篡改包必须通过（防「总是失败」的假阳性） |
 | I4 可复算 | 规范化输入 + `policy_digest` | 重放前置条件满足率；决策重构率 | 前置条件满足 = 记录含重放所需最小字段集（规范化输入、`policy_digest`、预算前后、上游摘要）；重构率 = 重放后决策序列与原始逐条一致的比例 |
 | 授权绑定参数 | 每条记录的 `args_digest` + 策略版本 | 分类违规率（超额 / 双付 / 越权商户） | 违规 = 场景声明的「应拦」动作被放行；按类别分别报告 |

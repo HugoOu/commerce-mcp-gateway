@@ -357,9 +357,13 @@ class Enforcer:
         )
 
     def _reserve(self, request: InterceptedRequest, basis: AuthorizationBasis) -> Hold | None:
-        """有金额的调用先占额度。没有 mandate 就不许花钱（fail-closed）。"""
+        """**动钱**的调用先占额度（ADR-0027：授权只是 hold，不占）。
+
+        两个条件都要满足：绑定声明了金额字段（否则不知道占多少），且 `reserves_budget` 没被关掉。
+        没有 mandate 就不许花钱（fail-closed）。
+        """
         binding = self._policy.binding_for(request.name or "")
-        if not binding.amount_field:
+        if not binding.amount_field or not binding.reserves_budget:
             return None
         amount = request.arguments.get(binding.amount_field)
         if amount is None:

@@ -4,9 +4,14 @@ version: 1
 default: deny
 
 bindings:
+  # ADR-0027：**只有真正动钱的调用占额度**。授权（create_payment_intent）只是 hold——
+  # 它在卡上占额度、会过期、会释放，钱在捕获时才动（Stripe manual capture 的语义）。
+  # 注意它**保留** amount_field、只关掉 reserves_budget：前者让策略引擎继续判上限
+  # （删掉它 999 元的授权就会被放行），后者才是「这次不动钱」。
   psp__create_payment_intent:
     amount_field: amount
     merchant_field: merchant_id
+    reserves_budget: false
   psp__capture_payment:
     amount_field: amount
   psp__refund_payment:

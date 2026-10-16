@@ -13,7 +13,7 @@ from typing import Any
 
 import mcp_types as types
 import pytest
-from harness import chain_rows, jsonl_rows, payload, running_gateway
+from harness import chain_rows, intent_id, jsonl_rows, payload, running_gateway
 from mcp.client.client import Client
 from mcp.shared.exceptions import MCPError
 
@@ -119,35 +119,72 @@ async def test_channel_three_out_of_mandate_resource_read(tmp_path: pathlib.Path
 
 
 async def test_allowed_payment_goes_through_and_settles(tmp_path: pathlib.Path) -> None:
-    """正路也要通：允许的支付走完整链，成功即 commit（ADR-0002）。"""
+    """正路也要通：允许的购买走完整链，**钱在捕获那一步进账**（ADR-0027）。
+
+    授权只是 hold（在卡上占额度、会过期、会释放），所以断言分两段：授权之后账本仍然干净，
+    捕获之后才是 9.71——一笔购买只记一次。
+    """
     async with running_gateway(tmp_path) as (gateway, url):
         async with Client(server=url, mode="auto") as client:
-            result = await client.call_tool(
+            authorized = await client.call_tool(
                 "psp__create_payment_intent",
-                {"amount": 9.71, "merchant_id": "m1", "checkout_ref": "ck_ok", "idempotency_key": "k-ok"},
+                {"amount": 9.71, "merchant_id": "m1", "checkout_ref": "ck_ok", "idempotency_key": "k-auth"},
+            )
+            after_authorize = gateway.budget.balance("agent-dev")
+            captured = await client.call_tool(
+                "psp__capture_payment",
+                {"payment_intent_id": intent_id(authorized), "amount": 9.71, "idempotency_key": "k-cap"},
             )
         balance = gateway.budget.balance("agent-dev")
 
-    is_error, text = payload(result)
+    is_error, text = payload(authorized)
+    assert not is_error, text
+    assert after_authorize.committed == 0.0, "授权不该进账——钱还没动（ADR-0027）"
+    is_error, text = payload(captured)
     assert not is_error, text
     assert balance.committed == 9.71
     assert balance.active_holds == 0.0
 
 
-async def test_declined_payment_releases_the_hold(tmp_path: pathlib.Path) -> None:
-    """业务失败不是工具失败：调用成功、但 hold 必须 release（`--psp-mode decline` 的那条路径）。"""
+async def test_a_failed_capture_releases_the_hold(tmp_path: pathlib.Path) -> None:
+    """捕获失败 → hold 必须 release（ADR-0002）。
+
+    ADR-0027 之后捕获是**唯一**会占额度的调用，所以 release 路径的端到端覆盖就落在这里。
+    （这里只断言账本不变量，不断言 `outcome` 的具体值——未知 intent 是「工具失败」还是
+    「上游异常」是 mock 的实现细节。）
+    """
+    async with running_gateway(tmp_path) as (gateway, url):
+        async with Client(server=url, mode="auto") as client:
+            result = await client.call_tool(
+                "psp__capture_payment",
+                {"payment_intent_id": "pi_missing", "amount": 9.71, "idempotency_key": "k-bad"},
+            )
+            balance = gateway.budget.balance("agent-dev")
+
+    is_error, _ = payload(result)
+    assert is_error, "捕获一个不存在的 intent 必须失败"
+    assert balance.committed == 0.0
+    assert balance.active_holds == 0.0, "失败要 release，不能留下 hold"
+
+
+async def test_a_declined_authorization_moves_no_money(tmp_path: pathlib.Path) -> None:
+    """被拒的授权：调用成功（PSP 说 `requires_payment_method`）、但一分钱都不进账。
+
+    ADR-0027 之前这条路径测的是「hold 被 release」；现在授权根本不占额度，所以它测的是
+    「业务失败不被记成消费」——release 那条路径改由捕获失败覆盖（上一条用例）。
+    """
     async with running_gateway(tmp_path, psp_mode="decline") as (gateway, url):
         async with Client(server=url, mode="auto") as client:
             result = await client.call_tool(
                 "psp__create_payment_intent",
-                {"amount": 9.71, "merchant_id": "m1", "checkout_ref": "ck_d", "idempotency_key": "k-d"},
+                {"amount": 9.71, "merchant_id": "m1", "checkout_ref": "ck_d", "idempotency_key": "k-decl"},
             )
         balance = gateway.budget.balance("agent-dev")
 
     is_error, text = payload(result)
     assert not is_error, text  # PSP 是「调用成功 + 状态为失败」
     assert balance.committed == 0.0
-    assert balance.active_holds == 0.0  # 被拒 → release，不占额度
+    assert balance.active_holds == 0.0
     assert any(row["outcome"] == "declined" for row in chain_rows(gateway))
 
 

@@ -56,7 +56,8 @@ binding:                        # 只有 closed 才有
 顺序约束（真实世界就是这么要求的，也是 W3 预算两阶段的依据）：
 
 - `complete_checkout` **必须**带一个由 PSP 签发的支付令牌（ACP 的 `payment_data`；Stripe 侧叫 Shared Payment Token），merchant 校验令牌与 checkout 的绑定；缺失或不匹配 → 拒绝且**不生成订单**。
-- PSP 的 `create_payment_intent` 是「授权 / 占用」（对应 ADR-0002 的 reserve），`capture_payment` 才是扣款（commit）；merchant 的 `complete_checkout` 只在 capture 成功后进入 `completed`。
+- PSP 的 `create_payment_intent` 是「授权 / 占用」（在卡上 hold，**会过期、会释放**），`capture_payment` 才是扣款；merchant 的 `complete_checkout` 只在 capture 成功后进入 `completed`。
+- **ADR-0027**：网关的预算账本跟着**钱**走，所以占额度的是 `capture_payment`（绑定里 `reserves_budget` 为真）；`create_payment_intent` 保留 `amount_field`（继续受 `amount_max` / `per_txn_max` 判上限）但把 `reserves_budget` 关掉。一笔 9.71 的购买因此**只记一次**（在此之前是 19.42：授权 commit 一次、捕获再 commit 一次）。
 - 任何一步失败都要能回滚：`cancel_payment_intent` 释放占用，`cancel_checkout` 释放购物车。
 
 ## 4. mock merchant 的工具契约

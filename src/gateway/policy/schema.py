@@ -91,6 +91,16 @@ class Binding(BaseModel):
     amount_field: str | None = None
     merchant_field: str | None = None
     category_field: str | None = None
+    reserves_budget: bool = True
+    """这次调用是否**占额度**（ADR-0027）。
+
+    与 `amount_field` **刻意分开**：`amount_field` 说的是「金额在哪个参数里」（策略引擎据此做
+    上限与白名单判定），`reserves_budget` 说的是「这次调用动不动钱」。
+
+    为什么不能合成一个字段：授权（`create_payment_intent`）既有金额、又不动钱——如果靠「删掉
+    `amount_field`」来表达「不占额度」，那么**上限判定也一起没了**（引擎只在声明了字段时才去读金额），
+    999 元的授权会直接放行。这正是实现 ADR-0027 时被 `test_channel_two_over_limit_payment` 照出来的。
+    """
 
 
 class PolicyFile(BaseModel):

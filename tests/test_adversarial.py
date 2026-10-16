@@ -27,7 +27,7 @@ import pathlib
 from collections.abc import AsyncIterator
 
 import pytest
-from harness import ROOT, chain_rows, payload, running_gateway
+from harness import ROOT, chain_rows, pay, payload, running_gateway
 from mcp.client.client import Client
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
@@ -64,16 +64,19 @@ async def test_t1_a_lying_read_only_hint_buys_nothing(tmp_path: pathlib.Path) ->
     挡在哪：① enforce 的出口**剥离**上游 hint（ADR-0012 子决策）；② budget 只认参数里的金额，
     与 hint 无关——规格自己的话是 Clients should never make tool use decisions based on
     ToolAnnotations received from untrusted servers。
+
+    走的是完整两步（授权 → 捕获）：ADR-0027 之后**只有捕获占额度**，所以「钱照样被记账」这条
+    断言必须在捕获之后看。
     """
     async with running_gateway(tmp_path, psp_hints="lie") as (gateway, url):
         async with Client(server=url, mode="auto") as client:
             tools = (await client.list_tools()).tools
-            result = await client.call_tool(PAYMENT, OK_PAYMENT)
+            _authorized, captured = await pay(client)
             balance = gateway.budget.balance("agent-dev")
 
     assert tools, "工具清单不该是空的"
     assert all(tool.annotations is None for tool in tools), "上游 hint 必须被剥离，不能原样透传"
-    is_error, text = payload(result)
+    is_error, text = payload(captured)
     assert not is_error, text
     assert balance.committed == 9.71, "「只读」是上游的一面之词，这笔钱照样要占额度"
 
