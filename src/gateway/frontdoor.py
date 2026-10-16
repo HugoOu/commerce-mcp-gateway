@@ -24,6 +24,14 @@ INSTRUCTIONS = (
     "工具名以 `<上游>__` 前缀区分。"
 )
 
+PASSTHROUGH_METHODS = ("initialize", "server/discover", "ping")
+"""交给 SDK 自己处理的方法（ADR-0011 排除的工具方法：读写不了业务数据）。
+
+`initialize` 是**握手版**（2025-11-25）客户端的握手方法，`server/discover` 是现代版的对应物，
+`ping` 是心跳。漏掉 `initialize` 的后果是实测出来的：老客户端连都连不上，直接
+`MCPError: Not implemented: initialize`——而 ADR-0024 决定了网关要**同时服务两代**。
+"""
+
 
 def _bearer_token(ctx: Any) -> str | None:
     """从入站 HTTP 请求里取 bearer token（stdio 没有头，返回 None）。"""
@@ -48,6 +56,17 @@ class GatewayMiddleware(ServerMiddleware[Any]):
 
     它在 `ServerRunner` 的链路里跑在所有校验与查找之前，所以 `ctx.params` 是**未校验**的原始
     参数——正是 ADR-0014 说的「校验类」字段，策略从这里读金额与商户。
+
+    入站消息按三类处理，界线是 ADR-0011 定的拦截面：
+
+    1. **拦截**（`tools/*`、`resources/read`）→ 走执行点，每次都有 Decision；
+    2. **放行**（`initialize` / `server/discover` / `ping`，以及**所有通知**）→ 原样交给 SDK。
+       通知没有返回值、也读写不了业务数据（`classification.py` 里归 `PASSTHROUGH`），
+       但 SDK 文档明说 `notifications/initialized` 也要在 `call_next` 里跑——不放行就等于
+       把握手掐断；判别依据是 `ctx.request_id is None`（SDK 文档给的通知/请求判别式）；
+    3. **其余一律结构化错误**（fail-closed）→ 包括 ADR-0013 里明确留作 future work 的
+       `resources/list`。宁可报「不认识」也不静默放行：静默放行会让 I1
+       （不存在未经 Decision 就放行的调用）随 SDK 版本悄悄失效。
     """
 
     def __init__(self, enforcer: Enforcer) -> None:
@@ -55,8 +74,10 @@ class GatewayMiddleware(ServerMiddleware[Any]):
 
     async def __call__(self, ctx: Any, call_next: Any) -> Any:
         method = ctx.method
-        if method in ("server/discover", "ping"):
-            return await call_next(ctx)  # 版本探测与心跳交给 SDK（ADR-0018：逐边协商、不翻译）
+        if ctx.request_id is None:
+            return await call_next(ctx)  # 通知：没有返回值，也不在拦截面里
+        if method in PASSTHROUGH_METHODS:
+            return await call_next(ctx)  # 握手与心跳交给 SDK（ADR-0018：逐边协商、不翻译）
 
         basis = self._enforcer.basis(_bearer_token(ctx))
         if basis is None:

@@ -56,7 +56,15 @@
 
 ## 6. `src/gateway/frontdoor.py` + `upstream.py` —— 前后门
 
-> 每填一节，都要有「读什么 / 为什么这样切 / 自测」三块，与上面两节保持同一格式。
+- **读什么**：`GatewayMiddleware.__call__` 的**三类分流**（拦截 / 放行 / 结构化错误）→ `_bearer_token`（下游凭证只用于识别调用方）→ `_meta`（协议事实）→ `channel_for` 把协议事实翻成审批通道名；`upstream.py` 的 `UpstreamRegistry.start`（启动时聚合工具清单、冲突 fail fast）→ `resolve`（按前缀路由）。
+- **为什么这样切**：
+  - **前门不做决策**：它只把「谁在调用」「客户端能接受什么」翻成执行点认识的输入；放行与拒绝永远只有执行点一个来源（ADR-0005 的分工）；
+  - **拦截面是白名单，不是黑名单**：`tools/*` + `resources/read` 走执行点；握手与心跳（`initialize` / `server/discover` / `ping`）与**所有通知**原样放行；其余一律 `-32602`。为什么不能反过来（放行一切、只拦已知的）？那样 I1 会随 SDK 新增方法**悄悄**失效——这条在 W4 Step 1 的验收里真的踩到了：`initialize` 没放行，老客户端连都连不上，而 ADR-0024 要的是双代并存；
+  - **通知的判别式是 `ctx.request_id is None`**（SDK 文档给的），不是方法名前缀——SDK 明说 `notifications/initialized` 也要在 `call_next` 里跑，不放行就等于把握手掐断；
+  - **审批通道的判断放在前门**：`_meta` 是协议层的东西，执行点不该解析它；前门只交出一个通道名，执行点按通道办事——所以测试可以直接注入通道，不必伪造 `_meta`；
+  - **`upstream.py` 是唯一持有 `mcp.client` 的地方**（`tests/test_layering.py` 用 AST 钉住）：这就是 I1 在代码结构上的那一半——别处拿不到上游客户端，旁路不是「不允许」而是「不可能」；
+  - **工具名在启动时就定好**（`<alias>__<tool>`），运行期只做前缀路由，冲突在启动时 fail fast（ADR-0008）。
+- **自测**：① 为什么 `initialize` 必须放行，而 `resources/list` 必须报错？② 通知为什么不走身份检查？③ 「旁路不可能」与「旁路被禁止」的区别是什么，代码里靠什么成立？④ 审批通道的判断为什么放在前门而不是执行点？⑤ 上游工具清单为什么要在**启动时**聚合而不是每次 `tools/list` 现拉？
 
 ## 7. `src/gateway/approval.py` + `cli.py` —— 审批闸门与命令行
 
@@ -65,6 +73,7 @@
   - **三条通道写同一个 JSONL**：CLI 看到的和客户端批准的一定是同一件事——形状只有一处定义（`_append`）；
   - **`request_state` 是客户端给的，必须校验**：规格只说「原样回传」，没说不可伪造；对不上动作指纹或主体就当作没这回事（ADR-0021 的绑定要求）；
   - **幂等登记**：同一（动作指纹, 主体）在未决定期间只有一条，客户端重试不会把 CLI 刷屏；已决定的不复用（单次使用）；
+  - **「过期」是显式状态**：`pending()` 只返回未决定**且未过期**的，所以 `register()` 不会复用一条 1.5 小时前的待审批；所有通道的收尾都写 `decision`（`by=human/client/timeout`），否则它会永远挂在待办里。这条是手工验收踩出来的，见 `docs/w4-plan.md`；
   - **调试客户端不放 `src/gateway/`**：`tools` / `call` / `read` 要当 MCP 客户端，而 `src/gateway/` 里只允许 `upstream.py` 持有 `mcp.client`（I1 的结构契约）——所以它们留在 `scripts/play.py`；
   - **argparse 的经典坑**：子解析器会把自己那份默认值写回 namespace，所以 `shared_flags()` 用 `SUPPRESS`——否则 `--psp-mode decline serve` 会被静默改回默认值。
-- **自测**：① 为什么「老客户端 + elicitation 广告」也只能拒？② `state_only` 挑战为什么是合法形状？③ 伪造 `request_state` 能造成什么？④ 为什么审计入口（`verify` / `replay`）该是产品的一部分，而调试客户端不是？
+- **自测**：① 为什么「老客户端 + elicitation 广告」也只能拒？② `state_only` 挑战为什么是合法形状？③ 伪造 `request_state` 能造成什么？④ 为什么审计入口（`verify` / `replay`）该是产品的一部分，而调试客户端不是？⑤ 等待预算为什么从**登记时刻**算起？把「过期」当成「还没决定」会同时坏掉哪三件事？⑥ 为什么超时也要落一条 `decision`？

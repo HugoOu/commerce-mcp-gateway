@@ -16,8 +16,10 @@ import time
 from collections.abc import AsyncIterator
 
 import mcp_types as types
+import pytest
 import uvicorn
 from mcp.client.client import Client
+from mcp.shared.exceptions import MCPError
 
 from gateway.app import Gateway
 from gateway.approval import DurableApprovalGate, channel_for
@@ -138,6 +140,30 @@ def test_wait_budget_is_counted_from_registration(tmp_path: pathlib.Path) -> Non
     assert gate.remaining(pending, now=pending.created_at) == 10.0
     assert gate.remaining(pending, now=pending.created_at + 4.0) == 6.0
     assert gate.remaining(pending, now=pending.created_at + 99.0) == 0.0
+
+
+def test_a_stale_pending_is_not_reused(tmp_path: pathlib.Path) -> None:
+    """**过期的待审批不再被复用**——这是手工验收时真踩到的坑，值得单独钉一条测试。
+
+    症状：上一次运行留下的过期待审批被新调用复用，而等待预算从它的 `created_at` 算起，
+    于是新调用**立刻**报 `approval_timeout`——人还没切到 CLI 窗口，窗口二就已经拒绝返回了。
+    """
+    path = tmp_path / "approvals.jsonl"
+    gate = DurableApprovalGate(path, timeout_seconds=30.0)
+    decision = Decision(kind="require_approval", reason_code="refund_requires_approval")
+    stale = gate.register(_request({"order_id": "ord_1"}), decision, _basis())
+
+    # 把这条记录的登记时刻挪到 10 分钟前（等价于「上一次运行留下的」）
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows[0]["created_at"] = rows[0]["created_at"] - 600.0
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8"
+    )
+
+    assert gate.pending() == []  # 过期的不是「待办」
+    fresh = gate.register(_request({"order_id": "ord_1"}), decision, _basis())
+    assert fresh.approval_id != stale.approval_id
+    assert gate.remaining(fresh) > 0
 
 
 # ---------------------------------------------------------------------- 端到端：两条通道
@@ -261,7 +287,11 @@ async def test_cli_channel_times_out_and_denies(tmp_path: pathlib.Path) -> None:
 
 
 async def test_legacy_client_cannot_be_asked(tmp_path: pathlib.Path) -> None:
-    """老客户端连 `input_required` 都读不懂 → 没法向它提问，只能 fail-closed 拒掉。"""
+    """老客户端连 `input_required` 都读不懂 → 没法向它提问，只能 fail-closed 拒掉。
+
+    这条用例顺带守住**握手**：老客户端（2025-11-25）要先发 `initialize`，而拦截点必须放行它，
+    否则连都连不上（实测过：`MCPError: Not implemented: initialize`）。
+    """
     async with running_gateway(tmp_path) as (_gateway, url):
         async with Client(server=url, mode="legacy") as client:
             result = await client.call_tool(REFUND, {"order_id": "ord_missing", "reason": "test"})
@@ -269,6 +299,21 @@ async def test_legacy_client_cannot_be_asked(tmp_path: pathlib.Path) -> None:
     is_error, text = _payload(result)
     assert is_error
     assert "approval_unavailable" in text
+
+
+async def test_unknown_method_is_a_structural_error(tmp_path: pathlib.Path) -> None:
+    """没实现的方法一律结构化错误（fail-closed）——包括 ADR-0013 留作 future work 的 `resources/list`。
+
+    宁可报「不认识」也不静默放行：静默放行会让 I1（不存在未经 Decision 就放行的调用）随 SDK
+    版本悄悄失效。
+    """
+    async with running_gateway(tmp_path) as (_gateway, url):
+        async with Client(server=url, mode="auto") as client:
+            with pytest.raises(MCPError) as denied:
+                await client.session.list_resources()
+
+    assert denied.value.code == -32602
+    assert "resources/list" in denied.value.message
 
 
 async def test_form_channel_still_works(tmp_path: pathlib.Path) -> None:

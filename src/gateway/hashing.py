@@ -9,7 +9,6 @@ import hashlib
 import json
 from typing import Any
 
-__all__ = ["canonical_json", "digest"]
 __all__ = ["canonical_json", "digest", "sha256_hex"]
 
 

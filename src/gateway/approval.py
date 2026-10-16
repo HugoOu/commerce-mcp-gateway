@@ -199,15 +199,23 @@ class DurableApprovalGate:
 
     # ------------------------------------------------------------------ 文件 / CLI 通道（兜底）
 
-    def pending(self) -> list[PendingApproval]:
-        """还没被决定的待审批（`python -m gateway approvals` 用它）。"""
+    def pending(self, *, now: float | None = None) -> list[PendingApproval]:
+        """**还有效**的待审批：未决定，且等待预算还没过期（`python -m gateway approvals` 用它）。
+
+        过期的那些不再列出来、也不再被复用——它们是历史记录，不是待办。
+        为什么必须这样分？因为验收时真踩到过一个很隐蔽的坑：上一次运行留下的**过期待审批**被新
+        调用复用，而等待预算从它的 `created_at` 算起，于是新调用**立刻**报 `approval_timeout`
+        ——人还没切到 CLI 窗口，窗口二就已经拒绝返回了。
+        """
+        moment = time.time() if now is None else now
         rows = self._rows()
         decided = {row["approval_id"] for row in rows if row.get("kind") == "decision"}
-        return [
+        items = [
             _pending_from_row(row)
             for row in rows
             if row.get("kind") == "pending" and row["approval_id"] not in decided
         ]
+        return [item for item in items if self.remaining(item, now=moment) > 0]
 
     def decision_for(self, approval_id: str) -> Decision | None:
         """文件里已经给出的决定；还没给就返回 `None`。"""
@@ -219,16 +227,22 @@ class DurableApprovalGate:
             return Decision(kind="deny", reason_code="approval_denied")
         return None
 
-    def decide(self, approval_id: str, *, approved: bool) -> None:
-        """投递一条决定——这就是 ADR-0006 的 CLI 通道（`python -m gateway approve <id>`）。
+    def decide(self, approval_id: str, *, approved: bool, by: str = "human") -> None:
+        """投递一条决定——**所有**通道的收尾都走这里，形状因此只有一处定义。
 
-        写在闸门里而不是命令行里：决定的**形状**只有一处定义，CLI 与闸门就不会对不上。
+        `by` 记的是「谁结的这件事」：`human`（CLI 通道）/ `client`（协议通道里客户端答的）
+        / `timeout`（等超了，fail-closed 拒掉）。三者都写 `approved`，所以 `decision_for`
+        不需要区分；但审计要区分——「人工拒绝」与「没人理」不是同一件事。
+
+        为什么超时也要落一条：不落的话这条待审批会**永远**留在「待办」列表里（协议通道同样如此），
+        而下一轮调用还可能复用它。
         """
         self._append(
             {
                 "kind": "decision",
                 "approval_id": approval_id,
                 "approved": approved,
+                "decided_by": by,
                 "decided_at": round(time.time(), 3),
             }
         )

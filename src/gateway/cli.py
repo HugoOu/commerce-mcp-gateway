@@ -172,8 +172,13 @@ def cmd_approvals(args: argparse.Namespace) -> None:
 def cmd_decide(args: argparse.Namespace) -> None:
     """投递一条决定（ADR-0006 的 CLI 通道）：网关那边在等的话，下一次轮询就会读到。"""
     approved = args.cmd == "approve"
-    DurableApprovalGate(pathlib.Path(args.approvals)).decide(args.approval_id, approved=approved)
+    gate = DurableApprovalGate(pathlib.Path(args.approvals))
+    live = {item.approval_id for item in gate.pending()}
+    gate.decide(args.approval_id, approved=approved)
     print(f"{args.approval_id} -> {'approved' if approved else 'denied'}")
+    if args.approval_id not in live:
+        print("  （注意：它不在待审批列表里——可能已经过期或已经决定过。决定仍会写入，")
+        print("    但网关不会再等它：过期的待审批不会被复用，这是刻意的。）")
 
 
 # ---------------------------------------------------------------------- 入口

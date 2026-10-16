@@ -261,7 +261,14 @@ class Enforcer:
         """
         answer = (input_responses or {}).get(APPROVAL_KEY)
         if answer is not None:
-            return self._approval.interpret(answer)
+            verdict = self._approval.interpret(answer)
+            answered = self._approval.resume(request_state, request, basis)
+            if answered is not None:
+                # 协议通道也要落一条决定：不落的话这条待审批会永远留在「待办」里（实测踩到过）
+                self._approval.decide(
+                    answered.approval_id, approved=verdict.kind == "allow", by="client"
+                )
+            return verdict
 
         if channel == "none":
             return Decision(kind="deny", reason_code="approval_unavailable")
@@ -285,6 +292,8 @@ class Enforcer:
             pending.approval_id, timeout=self._approval.remaining(pending)
         )
         if verdict is None:
+            # 超时也是一次「解决」：不落这条，它会一直挂在待办列表里，而且会被下一次调用复用
+            self._approval.decide(pending.approval_id, approved=False, by="timeout")
             return Decision(kind="deny", reason_code="approval_timeout")
         return verdict
 
