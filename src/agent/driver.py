@@ -106,6 +106,17 @@ def digest(events: list[dict[str, Any]]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
+def _leaf_errors(exc: BaseException) -> list[str]:
+    """把 `ExceptionGroup` 摊平成一串叶子错误——anyio 的任务组把真实原因埋在最里层。
+
+    不摊平的话轨迹里只留下 `ExceptionGroup: unhandled errors in a TaskGroup`，
+    真正的原因（例如模型端点返回 400）根本看不见：红队跑批换模型时就是这么被噎住的。
+    """
+    if isinstance(exc, BaseExceptionGroup):
+        return [message for inner in exc.exceptions for message in _leaf_errors(inner)]
+    return [f"{type(exc).__name__}: {exc}"]
+
+
 async def connect_servers(
     stack: AsyncExitStack, servers: list[tuple[str, str]]
 ) -> tuple[list[dict[str, Any]], dict[str, tuple[Client, str]]]:
@@ -240,7 +251,7 @@ async def run_task(config: RunConfig) -> int:
                 print("[stop] 超过步数上限")
     except Exception as exc:  # noqa: BLE001  失败也要留下 run_end，然后交给上层
         status = "error"
-        error = f"{type(exc).__name__}: {exc}"
+        error = " | ".join(_leaf_errors(exc))
         print(f"[error] {error}")
     finally:
         # 关掉模型客户端（`ReplayModel` 没有 aclose，所以用 getattr 兜一下）：

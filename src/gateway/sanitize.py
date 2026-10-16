@@ -38,11 +38,20 @@ class SanitizeReport:
     """这次净化做了什么——进证据，但不进线上响应（ADR-0003 的脱敏标记）。"""
 
     redactions: tuple[str, ...] = ()
+    """**真的改了内容**的项（PII 脱敏）。注入命中**不算**——那只是标记，内容一个字没动。"""
+    injection_hits: tuple[str, ...] = ()
+    """疑似注入的命中项（只标记、不改内容）。"""
     flagged_injection: bool = False
     dropped_blocks: int = 0
 
     @property
     def changed(self) -> bool:
+        """内容**被改过**吗（脱敏或丢块）——证据里的 `sanitized` 就是它。
+
+        注意它**不包含**注入命中：命中注入时内容原样交给模型（净化不改决策，删了就没人能复算）。
+        这条界线以前是糊的——`redactions` 里混进了 `injection:*`，于是「只命中注入」也会被记成
+        `sanitized=True`。2026-10-16 的 T2 用例把它照出来了。
+        """
         return bool(self.redactions) or self.dropped_blocks > 0
 
 
@@ -52,27 +61,31 @@ class Sanitizer:
     audience: str = "assistant"
     """只有 `audience` 含这一项的块才交给模型（规格的 `Annotations.audience` 语义）。"""
 
-    def text(self, value: str) -> tuple[str, list[str], bool]:
-        """返回 (净化后的文本, 命中项, 是否疑似注入)。"""
+    def text(self, value: str) -> tuple[str, list[str], list[str], bool]:
+        """返回 (净化后的文本, 脱敏项, 注入命中项, 是否疑似注入)。
+
+        两个列表**刻意分开**：脱敏项代表「内容被改了」，注入命中代表「内容没改，只是可疑」。
+        混在一起会让证据说不清「到底动了没有」。
+        """
         if not self.enabled:
-            return value, [], False
-        hits: list[str] = []
-        flagged = False
+            return value, [], [], False
+        pii: list[str] = []
+        injection: list[str] = []
         for name, pattern in INJECTION_PATTERNS:
             if pattern.search(value):
-                hits.append(f"injection:{name}")
-                flagged = True
+                injection.append(f"injection:{name}")
         for name, pattern in PII_PATTERNS:
             if pattern.search(value):
-                hits.append(f"pii:{name}")
+                pii.append(f"pii:{name}")
                 value = pattern.sub(REDACTION, value)
-        return value, hits, flagged
+        return value, pii, injection, bool(injection)
 
     def apply(self, result: types.CallToolResult) -> tuple[types.CallToolResult, SanitizeReport]:
         """净化工具结果。非文本块原样保留（W3 只处理文本）。"""
         if not self.enabled:
             return result, SanitizeReport()
-        hits: list[str] = []
+        redactions: list[str] = []
+        injections: list[str] = []
         flagged = False
         kept: list[types.ContentBlock] = []
         dropped = 0
@@ -83,11 +96,17 @@ class Sanitizer:
                 continue
             text = getattr(block, "text", None)
             if isinstance(text, str):
-                cleaned, found, suspicious = self.text(text)
-                hits.extend(found)
+                cleaned, pii, injection, suspicious = self.text(text)
+                redactions.extend(pii)
+                injections.extend(injection)
                 flagged = flagged or suspicious
                 block = block.model_copy(update={"text": cleaned})
             kept.append(block)
-        report = SanitizeReport(redactions=tuple(sorted(set(hits))), flagged_injection=flagged, dropped_blocks=dropped)
+        report = SanitizeReport(
+            redactions=tuple(sorted(set(redactions))),
+            injection_hits=tuple(sorted(set(injections))),
+            flagged_injection=flagged,
+            dropped_blocks=dropped,
+        )
         return result.model_copy(update={"content": kept}), report
 

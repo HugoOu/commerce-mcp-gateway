@@ -41,7 +41,6 @@ GENERIC_DENIAL = "policy_denied"
 ADAPTIVE_HINTS: dict[str, str] = {
     "amount_over_limit": "金额超过授权上限，换一个更小的金额再试",
     "amount_unreadable": "amount 必须是数字",
-    "amount_missing": "这次调用必须显式给出金额",
     "merchant_not_allowed": "这个商户不在授权范围内",
     "merchant_missing": "缺少 merchant_id",
     "category_not_allowed": "这个品类不在授权范围内",
@@ -364,10 +363,10 @@ class Enforcer:
             return None
         amount = request.arguments.get(binding.amount_field)
         if amount is None:
-            # 绑定声明了金额字段、参数里却没有——**fail-closed 拒掉**。
-            # 以前这里是「静默不占额度」，那是一个真实的 fail-open 洞：省略 amount 的
-            # capture 可以完全绕开预算（PSP 会按已授权的全额捕获）。威胁 T3。
-            raise _Denied(Decision(kind="deny", reason_code="amount_missing"))
+            # 走不到这里：**策略引擎已经先拒了**——`_check_constraints` 在绑定声明了金额字段而参数里
+            # 没有金额时返回 `amount_unreadable`（fail-closed）。留这一行只为「没有金额就不占额度」
+            # 这个局部不变量自明，不重复判定（判定只有一处，ADR-0005 的分工）。
+            return None
         if isinstance(amount, bool) or not isinstance(amount, (int, float)):
             raise _Denied(Decision(kind="deny", reason_code="amount_unreadable"))
         mandate = basis.mandate

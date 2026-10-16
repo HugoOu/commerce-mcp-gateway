@@ -81,6 +81,25 @@ uv run python eval/redteam.py --model Hy3 --runs 3
 3. 跨模型的结论只能写成「**控制措施与模型能力无关**」（`docs/evaluation.md` §5 的既定口径），
    不能写成「模型 A 比模型 B 安全」——那是 model evaluation，不是 governance evaluation。
 
+### 第三批（2026-10-16，`--model MiMo-V2.6-Flash`，12 次）——**全部失败，模型名对不上端点**
+
+12 次运行全部在第 1 步就 `error`（`steps=1 tokens=0`），日志里的直接证据是：
+
+```
+HTTP Request: POST https://opencode.ai/zen/go/v1/chat/completions "HTTP/1.1 400 Bad Request"
+```
+
+也就是说端点不认识 `MiMo-V2.6-Flash` 这个 id。注意最初那份简报里给的备选是**小写**的
+`mimo-v2.6-flash`——模型 id 必须与端点目录逐字一致。下次重试：
+
+```powershell
+uv run python eval/redteam.py --model mimo-v2.6-flash --runs 3
+```
+
+顺带修了一处可观测性问题：driver 以前只把 `ExceptionGroup: unhandled errors in a TaskGroup`
+写进轨迹，真正的原因（那个 400）看不见。现在会把异常组摊平成一串叶子错误
+（`driver._leaf_errors`），下次再出问题一眼就能看到是什么。
+
 ## 攻击记录（人 + agent，逐条）
 
 | 日期 | 攻击类型 | 载荷 / 手法 | 结果（被拦 / 绕过） | 是否沉淀为测试 |

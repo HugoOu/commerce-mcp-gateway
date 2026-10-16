@@ -162,10 +162,14 @@ async def test_t3_all_three_channels_are_blocked_in_one_run(tmp_path: pathlib.Pa
 
 
 async def test_t3_a_missing_amount_is_fail_closed(tmp_path: pathlib.Path) -> None:
-    """T3：绑定声明了金额字段、参数里却没给 → **拒**，而不是「不占额度」。
+    """T3：绑定声明了金额字段、参数里却没给 → **拒**（`amount_unreadable`），而不是「不占额度」。
 
-    这是一个真实的 fail-open 洞（2026-10-16 修）：以前省略 `amount` 的 capture 会**完全绕开预算**
-    ——PSP 会按已授权的全额捕获，而网关一分钱都没记。攻击面就是「少传一个字段」。
+    攻击面是「少传一个字段」：省略 `amount` 的 capture 若能过闸，PSP 会按已授权的全额捕获，
+    而网关一分钱都没记。挡在哪：**策略引擎**——`_check_constraints` 在绑定声明了金额字段而参数里
+    没有金额时直接拒（ADR-0001 的校验类字段），执行点的 `_reserve` 因此根本不会看到「有字段没值」。
+
+    这条用例的来历值得记：我曾误判它是 `_reserve` 里的 fail-open 洞并「修」了一次，测试当场
+    证明引擎早就拦住了（`amount_unreadable`）——于是回退了那处改动。**判定只有一处**（ADR-0005 的分工）。
     """
     async with running_gateway(tmp_path) as (gateway, url):
         async with Client(server=url, mode="auto") as client:
@@ -174,7 +178,7 @@ async def test_t3_a_missing_amount_is_fail_closed(tmp_path: pathlib.Path) -> Non
 
     is_error, text = payload(result)
     assert is_error
-    assert "amount_missing" in text
+    assert "amount_unreadable" in text
     assert balance.active_holds == 0.0
 
 
