@@ -73,6 +73,24 @@ class IdentityResolver:
             if not self.config.allow_anonymous:
                 return None
             identity = TokenIdentity(self.config.anonymous_subject, self.config.anonymous_scopes)
+        return self._basis_of(identity)
+
+    def basis_for_subject(self, subject: str) -> AuthorizationBasis | None:
+        """按**主体**还原授权依据——重放重构用它（ADR-0028）。
+
+        链上只有主体（token 本身绝不进证据，ADR-0019），所以要反查配置：先找 subject 匹配的 token，
+        再退到匿名身份。都找不到就返回 `None`——那条**没法重构**，由证据层如实报告，不猜。
+        """
+        for identity in self.config.tokens.values():
+            if identity.subject == subject:
+                return self._basis_of(identity)
+        if subject == self.config.anonymous_subject:
+            return self._basis_of(
+                TokenIdentity(self.config.anonymous_subject, self.config.anonymous_scopes)
+            )
+        return None
+
+    def _basis_of(self, identity: TokenIdentity) -> AuthorizationBasis:
         return AuthorizationBasis(
             subject=identity.subject,
             scopes=frozenset(identity.scopes),

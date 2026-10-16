@@ -32,6 +32,7 @@ __all__ = [
     "EvidenceEntry",
     "EvidenceLedger",
     "EvidenceLog",
+    "ReconstructReport",
     "ReplayReport",
     "VerifyReport",
     "digest",
@@ -54,6 +55,22 @@ REPLAY_REQUIRED: dict[str, tuple[str, ...]] = {
     "done": ("run_id", "seq", "session_id", "method", "decision", "result_digest"),
 }
 """重放前置条件的最小字段集（`docs/evaluation.md` 的 I4 口径）。缺哪个字段，那条就没法重放。"""
+
+RECONSTRUCTABLE: frozenset[str] = frozenset({"tools/call", "resources/read"})
+"""参与**重构**的方法（ADR-0028）：它们的决策来自策略，所以能被重算。
+`tools/list` 的 `allow` 是执行点自己写的，不属于可复算的范畴。"""
+
+
+def _decision_rows(rows: Sequence[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    """每次调用取**第一条**记录——决策写在它上面。
+
+    为什么不只看 `phase == "pending"`：`resources/read` 被允许时只写一条 `done`（它随后必然报
+    「不存在」），只看 pending 会把这条决策整个漏掉。第一次出现的行在所有路径上都带着决策。
+    """
+    first: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        first.setdefault(int(row["seq"]), row)
+    return first
 
 
 @dataclass(frozen=True)
@@ -107,6 +124,34 @@ class ReplayReport:
     preconditions_met: bool = False
 
 
+@dataclass(frozen=True)
+class ReconstructReport:
+    """重放**重构**的结果——两个数分开报（ADR-0028）。"""
+
+    eligible: int
+    """参与重构的条目数（只有 `tools/call` 与 `resources/read`：它们的决策来自策略）。"""
+    preconditions_met: int
+    """其中「输入件在、且摘要对得上」的条数。"""
+    matched: int | None = None
+    """其中「用真策略重算的决策与链上一致」的条数；没传评估器就是 `None`。"""
+    mismatches: tuple[int, ...] = ()
+    skipped: tuple[tuple[int, str], ...] = ()
+    """被跳过的条目与原因——**不隐藏缺口**，它是结论的一部分。"""
+    detail: str = ""
+
+    @property
+    def precondition_rate(self) -> float:
+        """前置条件满足率：证据够不够用来重构。"""
+        return self.preconditions_met / self.eligible if self.eligible else 0.0
+
+    @property
+    def reconstruction_rate(self) -> float | None:
+        """决策重构率：重构出来对不对。"""
+        if self.matched is None:
+            return None
+        return self.matched / self.eligible if self.eligible else 0.0
+
+
 class EvidenceLedger(Protocol):
     """执行点只依赖这几个方法。"""
 
@@ -114,13 +159,22 @@ class EvidenceLedger(Protocol):
 
     def record_done(self, entry: EvidenceEntry) -> EvidenceEntry: ...
 
+    def record_inputs(self, run_id: str, seq: int, arguments: dict[str, Any]) -> pathlib.Path: ...
+
     def verify(self, run_id: str | None = None) -> VerifyReport: ...
 
     def replay(
         self, run_id: str | None = None, *, evaluator: Callable[[EvidenceEntry], str] | None = None
     ) -> ReplayReport: ...
 
-    def package(self, run_id: str, target: pathlib.Path) -> pathlib.Path: ...
+    def reconstruct(
+        self,
+        run_id: str | None = None,
+        *,
+        evaluator: Callable[[EvidenceEntry, dict[str, Any]], str] | None = None,
+    ) -> ReconstructReport: ...
+
+    def package(self, run_id: str, target: pathlib.Path, *, with_inputs: bool = False) -> pathlib.Path: ...
 
 
 def _entry_from_row(row: dict[str, Any]) -> EvidenceEntry:
@@ -252,6 +306,88 @@ class ChainLedger:
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return manifest_path
 
+    # ------------------------------------------------------------------ 可复算输入（ADR-0028）
+
+    def record_inputs(self, run_id: str, seq: int, arguments: dict[str, Any]) -> pathlib.Path:
+        """把这次调用的**规范化输入**写进可复算输入件（`runs/<run_id>.inputs.jsonl`）。
+
+        它**不进链**：链是可对外出示的防篡改件，而金额、商户、订单号属于不该进可出示件的数据。
+        两者的绑定靠摘要——`reconstruct()` 会校验 `digest(arguments) == 链上的 args_digest`。
+        同一条 (run, seq) 只写一次：一次调用有 pending / done 两次记账，但输入只有一份。
+        """
+        path = self._inputs_path(run_id)
+        with self._lock:
+            if seq in self.inputs_for(run_id):
+                return path
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps({"seq": seq, "arguments": arguments}, ensure_ascii=False) + "\n"
+                )
+        return path
+
+    def inputs_for(self, run_id: str) -> dict[int, dict[str, Any]]:
+        """读回输入件 `{seq: arguments}`。**文件不在不是错误**——那是「无法重构」，要如实报告。"""
+        rows = _load_rows(self._inputs_path(run_id))
+        return {int(row["seq"]): (row.get("arguments") or {}) for row in rows}
+
+    def reconstruct(
+        self,
+        run_id: str | None = None,
+        *,
+        evaluator: Callable[[EvidenceEntry, dict[str, Any]], str] | None = None,
+    ) -> ReconstructReport:
+        """逐条把决策**重算**一遍（ADR-0028 的可重构性）。
+
+        两个数刻意分开报，因为它们回答不同的问题：**前置条件满足率**（证据够不够用来重构）、
+        **决策重构率**（重构出来对不对）。把输入件撤下之后，链仍然 `verify` 通过，而前置条件满足率
+        归零——这个落差就是文献说的 overclaim gap，也是这套分层存在的理由。
+        """
+        rows = _load_rows(self._run_path(run_id)) if run_id else _load_rows(self.chain_path)
+        inputs = self.inputs_for(run_id or "")
+        by_seq = _decision_rows(rows)
+
+        eligible = {seq: row for seq, row in by_seq.items() if row.get("method") in RECONSTRUCTABLE}
+        skipped = [
+            (seq, f"{row.get('method')} 的决策不是策略给的")
+            for seq, row in by_seq.items()
+            if seq not in eligible
+        ]
+
+        checked: dict[int, dict[str, Any]] = {}
+        for seq, row in eligible.items():
+            arguments = inputs.get(seq)
+            if arguments is None:
+                skipped.append((seq, "输入件里没有这条（无法重构）"))
+                continue
+            if digest(arguments) != row.get("args_digest"):
+                skipped.append((seq, "输入件与链上的 args_digest 不符（被改过？）"))
+                continue
+            checked[seq] = arguments
+
+        mismatches: tuple[int, ...] = ()
+        matched: int | None = None
+        if evaluator is not None:
+            mismatches = tuple(
+                sorted(
+                    seq
+                    for seq, arguments in checked.items()
+                    if evaluator(_entry_from_row(by_seq[seq]), arguments) != by_seq[seq].get("decision")
+                )
+            )
+            matched = len(checked) - len(mismatches)
+
+        return ReconstructReport(
+            eligible=len(eligible),
+            preconditions_met=len(checked),
+            matched=matched,
+            mismatches=mismatches,
+            skipped=tuple(sorted(skipped)),
+            detail=f"可重构 {len(checked)}/{len(eligible)} 条；跳过 {len(skipped)} 条",
+        )
+
+    def _inputs_path(self, run_id: str) -> pathlib.Path:
+        return self.runs_dir / f"{run_id}.inputs.jsonl"
+
     # ------------------------------------------------------------------ 校验与重放
 
     def verify(self, run_id: str | None = None) -> VerifyReport:
@@ -323,8 +459,10 @@ class ChainLedger:
         证据层**不 import 策略**：评估器是参数，不是依赖（层次干净，也便于测试塞假实现）。
         """
         rows = _load_rows(self._run_path(run_id)) if run_id else _load_rows(self.chain_path)
-        pending = [row for row in rows if row.get("phase") == "pending"]
-        decisions = tuple(str(row.get("decision")) for row in pending)
+        # 每次调用取第一条记录（见 `_decision_rows`：只看 pending 会漏掉 resources/read
+        # 那种只有 done 的路径）。
+        decisions_rows = list(_decision_rows(rows).values())
+        decisions = tuple(str(row.get("decision")) for row in decisions_rows)
         preconditions_met = all(_has_preconditions(row) for row in rows) if rows else False
 
         if evaluator is None:
@@ -332,7 +470,7 @@ class ChainLedger:
 
         mismatches = tuple(
             index
-            for index, row in enumerate(pending)
+            for index, row in enumerate(decisions_rows)
             if evaluator(_entry_from_row(row)) != row.get("decision")
         )
         return ReplayReport(
@@ -344,8 +482,15 @@ class ChainLedger:
 
     # ------------------------------------------------------------------ 交付
 
-    def package(self, run_id: str, target: pathlib.Path) -> pathlib.Path:
-        """把一次运行的证据包导出到 `target`（JSONL + manifest），返回 manifest 路径。"""
+    def package(
+        self, run_id: str, target: pathlib.Path, *, with_inputs: bool = False
+    ) -> pathlib.Path:
+        """把一次运行的证据包导出到 `target`（JSONL + manifest），返回 manifest 路径。
+
+        `with_inputs=False`（默认）导出的就是**可对外出示**的那一份：只有摘要，没有金额与商户。
+        要连可复算输入一起带走（例如交给评测器重算决策），显式传 `with_inputs=True`——那时
+        导出件里会出现支付数据，别随手分发（ADR-0028 的分层）。
+        """
         run_path = self._run_path(run_id)
         if not run_path.exists():
             raise FileNotFoundError(f"没有这次运行的记录：{run_path}")
@@ -357,6 +502,10 @@ class ChainLedger:
             )
             exported = target / f"{run_id}.manifest.json"
             exported.write_text(manifest_path.read_text(encoding="utf-8"), encoding="utf-8")
+            if with_inputs and self._inputs_path(run_id).exists():
+                (target / f"{run_id}.inputs.jsonl").write_text(
+                    self._inputs_path(run_id).read_text(encoding="utf-8"), encoding="utf-8"
+                )
             return exported
         return manifest_path
 

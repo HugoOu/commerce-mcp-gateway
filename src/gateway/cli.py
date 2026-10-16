@@ -156,6 +156,29 @@ def cmd_replay(args: argparse.Namespace) -> None:
     print("      真正重算决策需要原文，见 docs/w4-plan.md Step 3 的待定口径。")
 
 
+async def cmd_reconstruct(args: argparse.Namespace) -> None:
+    """用**真策略**把某次运行的决策逐条重算（ADR-0028 的可重构性）。
+
+    需要与当时**相同**的策略与上游清单，所以它会按演示配置把上游起起来（约 1 秒）。
+    两个数分开报：**前置条件满足率**（输入件在不在、摘要对不对）与**决策重构率**（重算对不对）。
+    把输入件撤下之后链仍然 `verify` 通过、而前置条件满足率归零——那个落差本身就是结论。
+    """
+    config = demo_config(args)
+    async with Gateway(config) as gateway:
+        report = gateway.enforcer.reconstruct(args.run)
+    rate = report.reconstruction_rate
+    print(f"reconstruct（run={args.run}）：{report.detail}")
+    print(f"  前置条件满足率：{report.preconditions_met}/{report.eligible}（{report.precondition_rate:.2f}）")
+    if rate is None:
+        print("  决策重构率：—（没传评估器）")
+    else:
+        print(f"  决策重构率：{report.matched}/{report.eligible}（{rate:.2f}）")
+    for seq, reason in report.skipped:
+        print(f"  跳过 #{seq}：{reason}")
+    if report.mismatches:
+        print(f"  重算不一致：# {list(report.mismatches)}")
+
+
 # ---------------------------------------------------------------------- 审批
 
 
@@ -226,6 +249,8 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--run", default=None)
     replay = sub.add_parser("replay", parents=[shared], help="重放前置条件与决策序列")
     replay.add_argument("--run", default=None)
+    reconstruct = sub.add_parser("reconstruct", parents=[shared], help="用真策略重算某次运行的决策")
+    reconstruct.add_argument("--run", required=True, help="要重算的那次运行（必填）")
     sub.add_parser("approvals", parents=[shared], help="列出待审批")
     for name in ("approve", "deny"):
         decide = sub.add_parser(name, parents=[shared], help=f"{name} 一条待审批")
@@ -243,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
         cmd_verify(args)
     elif args.cmd == "replay":
         cmd_replay(args)
+    elif args.cmd == "reconstruct":
+        asyncio.run(cmd_reconstruct(args))
     elif args.cmd == "approvals":
         cmd_approvals(args)
     else:

@@ -28,7 +28,7 @@ from . import telemetry
 from .approval import APPROVAL_KEY, ApprovalChannel, DurableApprovalGate
 from .budget import BudgetExceeded, BudgetLedger, Hold
 from .decision import AuthorizationBasis, Decision, InterceptedRequest
-from .evidence import ChainLedger, EvidenceEntry
+from .evidence import ChainLedger, EvidenceEntry, ReconstructReport
 from .hashing import digest
 from .identity import IdentityResolver
 from .policy import PolicyEngine
@@ -99,6 +99,40 @@ class Enforcer:
     def unauthenticated(self) -> NoReturn:
         """身份缺失或认不出来：**结构性错误**——客户端该修的是凭证，不是模型该修的东西。"""
         raise MCPError(code=INVALID_REQUEST, message="unauthenticated", data=None)
+
+    # ------------------------------------------------------------------ 重放重构
+
+    def reconstruct(self, run_id: str) -> ReconstructReport:
+        """用**真策略**把这次运行的决策逐条重算（ADR-0028 的可重构性）。
+
+        评估器闭包住策略与身份解析——证据层不 import 策略（ADR-0003 的分层），所以
+        「怎么重算」由执行点决定，「能不能重算」由证据层如实报告（两个数分开报）。
+
+        三个输入都从证据里还原：`arguments` 来自可复算输入件、`now` 就是条目的 `ts`
+        （`_record` 用的就是求值时刻）、`basis` 按主体反查身份配置（token 本身不进证据）。
+        """
+
+        def evaluator(entry: EvidenceEntry, arguments: dict[str, Any]) -> str:
+            basis = self._identity.basis_for_subject(entry.session_id)
+            if basis is None:
+                return "unknown_subject"
+            if entry.method == "tools/call":
+                try:
+                    self._registry.resolve(entry.tool or "")
+                except UnknownTool:
+                    return "error"  # 未知工具那条记录的 decision 就是 error（结构性错误）
+            request = InterceptedRequest(
+                method=entry.method,
+                session_id=entry.session_id,
+                tool_call_id=entry.tool_call_id or "",
+                request_id=entry.request_id,
+                name=entry.tool,
+                arguments=arguments,
+                now=entry.ts,
+            )
+            return self._policy.evaluate(request, basis).kind
+
+        return self._evidence.reconstruct(run_id, evaluator=evaluator)
 
     # ------------------------------------------------------------------ 工具清单
 
@@ -425,6 +459,9 @@ class Enforcer:
         sanitized: bool = False,
         suspected_adversarial: bool = False,
     ) -> EvidenceEntry:
+        # 可复算输入**单独**落一份（ADR-0028）：链上只留摘要，重放时用摘要把两件钉在一起。
+        # 幂等——一次调用有 pending / done 两次记账，但输入只有一份。
+        self._evidence.record_inputs(self._run_id, seq, request.arguments)
         entry = EvidenceEntry(
             phase="pending" if phase == "pending" else "done",
             seq=seq,
