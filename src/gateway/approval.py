@@ -21,7 +21,7 @@ import json
 import pathlib
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from typing import Protocol
 
 import mcp_types as types
@@ -124,8 +124,9 @@ class DurableApprovalGate:
         """还没被决定的待审批（`scripts/approve.py list` 用它）。"""
         rows = self._rows()
         decided = {row["approval_id"] for row in rows if row.get("kind") == "decision"}
+        known = {field.name for field in fields(PendingApproval)}
         return [
-            PendingApproval(**row)
+            PendingApproval(**{key: value for key, value in row.items() if key in known})
             for row in rows
             if row.get("kind") == "pending" and row["approval_id"] not in decided
         ]
