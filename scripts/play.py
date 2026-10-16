@@ -4,6 +4,7 @@
 
     # 窗口 1：起网关（带策略与 mandate，默认 127.0.0.1:8765）
     uv run python scripts/play.py serve
+    uv run python scripts/play.py serve --psp-mode decline --merchant-mode inject_in_messages
 
     # 窗口 2：随便玩
     uv run python scripts/play.py tools                  # 看被过滤后的工具清单
@@ -21,6 +22,9 @@
 参数写法：默认 `key=value`（值先按 JSON 解析，失败就当字符串），也接受一整段 JSON。
 **PowerShell 会吃掉 JSON 里的双引号**（`'{"a": 1}'` 到 Python 手上变成 `{a: 1}`），
 所以 JSON 写法在 PowerShell 里必须转义成 `'{\"a\": 1}'`——嫌麻烦就用 `key=value`。
+
+`--host` / `--port` / `--merchant-mode` / `--psp-mode` 这些开关写在子命令**前面或后面都行**
+（`play.py --psp-mode decline serve` 与 `play.py serve --psp-mode decline` 等价）。
 """
 
 from __future__ import annotations
@@ -247,6 +251,7 @@ async def cmd_scenario(args: argparse.Namespace) -> None:
                 show("\n6) 审批：退款要走人工（这里由 elicitation 自动批准）", await client.call_tool(
                     "merchant__request_refund", {"order_id": "ord_missing", "reason": "play"}
                 ))
+                print("\n7) 通道③：越界 URI 读取")
                 await cmd_read(gateway.url, "mcp://m1/orders/secret")
                 balance = gateway.budget.balance("agent-dev")
                 print(f"\n8) 预算：committed={balance.committed} active={balance.active_holds}"
@@ -268,6 +273,25 @@ async def cmd_serve(args: argparse.Namespace) -> None:
         await server.serve()
 
 
+def _shared_flags() -> argparse.ArgumentParser:
+    """让同一组开关在**子命令前后都能写**：`play.py --psp-mode decline serve` 与
+    `play.py serve --psp-mode decline` 等价。
+
+    子命令这一份的默认值必须是 `SUPPRESS`：argparse 的子解析器会把自己那份默认值写回
+    namespace，把主解析器刚解析出来的值冲掉——这是 argparse 的经典坑，只加 `parents` 不够。
+    """
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument("--host", default=argparse.SUPPRESS)
+    shared.add_argument("--port", type=int, default=argparse.SUPPRESS)
+    shared.add_argument("--evidence", default=argparse.SUPPRESS)
+    shared.add_argument("--budget", default=argparse.SUPPRESS)
+    shared.add_argument("--approvals", default=argparse.SUPPRESS)
+    shared.add_argument("--merchant-mode", default=argparse.SUPPRESS)
+    shared.add_argument("--psp-mode", default=argparse.SUPPRESS)
+    shared.add_argument("--approval-timeout", type=float, default=argparse.SUPPRESS)
+    return shared
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="手动玩 MCP 网关")
     parser.add_argument("--host", default="127.0.0.1")
@@ -278,22 +302,23 @@ def main() -> int:
     parser.add_argument("--merchant-mode", default="none")
     parser.add_argument("--psp-mode", default="none")
     parser.add_argument("--approval-timeout", type=float, default=30.0)
+    shared = _shared_flags()
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("serve")
-    sub.add_parser("tools")
-    sub.add_parser("scenario")
-    call = sub.add_parser("call")
+    sub.add_parser("serve", parents=[shared])
+    sub.add_parser("tools", parents=[shared])
+    sub.add_parser("scenario", parents=[shared])
+    call = sub.add_parser("call", parents=[shared])
     call.add_argument("tool")
     call.add_argument("args", nargs="*", default=[], help="key=value（推荐）或一整段 JSON")
-    read = sub.add_parser("read")
+    read = sub.add_parser("read", parents=[shared])
     read.add_argument("uri")
-    chain = sub.add_parser("chain")
+    chain = sub.add_parser("chain", parents=[shared])
     chain.add_argument("--run", default=None)
-    verify = sub.add_parser("verify")
+    verify = sub.add_parser("verify", parents=[shared])
     verify.add_argument("--run", default=None)
-    sub.add_parser("approvals")
+    sub.add_parser("approvals", parents=[shared])
     for name in ("approve", "deny"):
-        decide = sub.add_parser(name)
+        decide = sub.add_parser(name, parents=[shared])
         decide.add_argument("approval_id")
     args = parser.parse_args()
 
