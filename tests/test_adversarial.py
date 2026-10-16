@@ -116,23 +116,22 @@ async def test_t2_injected_content_does_not_change_any_decision(tmp_path: pathli
     assert is_error and "amount_over_limit" in text
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ADR-0003 的证据条目里没有 suspected_adversarial 字段；威胁模型 T2 要求标记（见 docs/w4-plan.md）",
-)
 async def test_t2_injection_should_be_marked_in_the_evidence(tmp_path: pathlib.Path) -> None:
-    """T2 的**已知缺口**：`Sanitizer` 算出了 `flagged_injection`，但执行点只记 `changed`。
+    """T2：注入命中要**单独**标记进证据——与「内容被改过」分开记。
 
-    `changed` 只反映「内容被改过」（PII 脱敏 / 丢块），所以「只命中注入、没命中 PII」时
-    证据里看不出任何异常——而威胁模型要求标 `suspected_adversarial`。
-    补它要动证据条目的 schema（旧链会因为哈希重算不符而 verify 失败），所以留给你决策。
+    `sanitized` 说的是「内容被改过」（PII 脱敏 / 丢块），`suspected_adversarial` 说的是
+    「内容没被改，但看起来像注入」。这条注入串不含 PII，所以两个字段恰好一真一假——
+    这正是它们必须分开的理由（2026-10-16 采纳方案：加字段 + 升 `SCHEMA_VERSION` 到 2）。
     """
     async with running_gateway(tmp_path, merchant_mode="inject_in_catalog") as (gateway, url):
         async with Client(server=url, mode="auto") as client:
             await client.call_tool("merchant__list_catalog", {"category": "food"})
             rows = chain_rows(gateway)
 
-    assert any(row.get("suspected_adversarial") for row in rows)
+    catalog_rows = [row for row in rows if row["tool"] == "merchant__list_catalog"]
+    assert catalog_rows, "应当有这条调用的记录"
+    assert any(row["suspected_adversarial"] for row in catalog_rows)
+    assert not any(row["sanitized"] for row in catalog_rows), "注入不等于内容被改过"
 
 
 # ---------------------------------------------------------------------- T3 越权与超额（批量版）
@@ -160,6 +159,23 @@ async def test_t3_all_three_channels_are_blocked_in_one_run(tmp_path: pathlib.Pa
     assert blocked == 3, f"三条通道应当全拦，实际拦了 {blocked}"
     reasons = {row["reason_code"] for row in rows if row["decision"] == "deny"}
     assert {"policy_denied", "amount_over_limit"} <= reasons
+
+
+async def test_t3_a_missing_amount_is_fail_closed(tmp_path: pathlib.Path) -> None:
+    """T3：绑定声明了金额字段、参数里却没给 → **拒**，而不是「不占额度」。
+
+    这是一个真实的 fail-open 洞（2026-10-16 修）：以前省略 `amount` 的 capture 会**完全绕开预算**
+    ——PSP 会按已授权的全额捕获，而网关一分钱都没记。攻击面就是「少传一个字段」。
+    """
+    async with running_gateway(tmp_path) as (gateway, url):
+        async with Client(server=url, mode="auto") as client:
+            result = await client.call_tool("psp__capture_payment", {"payment_intent_id": "pi_x"})
+            balance = gateway.budget.balance("agent-dev")
+
+    is_error, text = payload(result)
+    assert is_error
+    assert "amount_missing" in text
+    assert balance.active_holds == 0.0
 
 
 # ---------------------------------------------------------------------- T4 confused deputy

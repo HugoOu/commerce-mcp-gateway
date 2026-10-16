@@ -37,6 +37,7 @@
 - 为什么不选 a：纯内存计数器重启即丢，并发下也不安全。
 - 为什么不选 b：仅由账本推导余额会在在途窗口超支——两笔 30 元并发对 100 元上限会都看到 100 可用，这正是重复花费窗口，三类里最危险。
 - 为什么不选 c：外部预算服务对 demo 是过度设计，引入额外运维成本。
+- 补充（2026-10-16，安全修复，不改决策本身）：**「绑定声明了金额字段、参数里却没给」必须 fail-closed 拒掉**（`amount_missing`），而不是静默不占额度。旧行为是一个真实的 fail-open 洞：省略 `amount` 的 `capture_payment` 会完全绕开预算——PSP 按已授权的全额捕获，而网关一分钱都没记（攻击面就是「少传一个字段」）。它与本 ADR 既有的 fail-closed 姿态一致（同一函数里「没有 mandate 就不许花钱」就是这么写的），所以作为缺陷修复落地，不另开 ADR。**哪些调用该占额度**是另一个问题，见 ADR-0027（候选）。
 
 ## ADR-0003 证据语义（已采纳，2026-10-10）
 
@@ -543,6 +544,26 @@
 - 为什么不选 c：`evidence/` 与 `budget/` 在 `record_pending` / `settle` 上强耦合（证据先于副作用、hold 生命周期要进证据），拆开写反而增加返工。
 - 决策（已定，2026-10-15）：采纳推荐方案。`AGENTS.md` 的分工表与 AI Native 实践同步更新；**硬规矩 1 不变**（仍然是「面试能复述」），只是达成路径从「你手写」改成「读代码导览 + Step 5 盘问」。
 - 依据：本页证据（时间账、学习机制的可替代性、Step 1 的先例）与你 2026-10-15 的明确授权。
+
+## ADR-0027 预算的计量口径：授权还是捕获（候选，含证据链与推荐，待你决策）
+
+- 背景：ADR-0002 定了**机制**（reserve → commit/release、幂等键、TTL 回收），但没定**哪些调用该占额度**。当前实现是「绑定里有 `amount_field` 且参数里有金额 → 占额度」，而 demo 策略给 `create_payment_intent`（授权）与 `capture_payment`（捕获）**都**声明了 `amount_field`——于是同一笔钱被记两次。
+- 实测（2026-10-16，红队第一批跑批撞出来的）：
+  - `create_payment_intent` 成功（状态 `requires_capture`，**钱没动**）→ 网关 `commit` 9.71；
+  - `capture_payment`（同一笔 9.71）→ 再 `reserve` 9.71 并 `commit` → **一次 9.71 的购买按 19.42 记账**；
+  - 预算紧时表现为「预算用尽」：第一批 8 次运行的 `budget_exceeded` 全部来自这里（`docs/redteam-log.md`）。
+- 证据（业务语义，与 ADR-0002 引的 Stripe manual capture 同一页）：
+  - Stripe：**Authorizing a payment guarantees the amount by holding it on the customer payment method**——授权是**在卡上占额度**，钱在 capture 时才真正移动；charge 上的 `capture_before` 标明授权何时过期。
+  - AP2 的两阶段 mandate：open mandate 在授权阶段产生、closed mandate 在捕获阶段绑定到具体交易——同样是「先占后扣」。
+  - 结论：**授权 = hold，捕获 = charge**。网关的预算账本记的是「用户花了多少」，所以它应该跟着 **charge** 走，而不是跟着 hold 走。
+- 推荐（**方案 A**）：**只有真正动钱的调用占额度**——把 `amount_field` 从 `create_payment_intent` 的绑定里去掉，保留 `capture_payment` 的。
+  - 为什么这是最小改动：`bindings` 是**策略文件**里的数据（`demo-policy.yaml`），改它不动一行代码，也不需要新的状态。
+  - 钱为什么仍然安全：**捕获是唯一不可逆的那一步**，预算在它那里强制；授权阶段还有 `amount_max` 与商户 / 品类约束把着（规则约束与预算是两条独立的闸）。并发下最坏情况是「多笔授权成功、后面的捕获被拒」——钱没多花，只是留下几个未捕获的 intent。
+  - 代价（诚实写出来）：授权不再预留额度，所以「在途窗口」里看不到占用；如果将来要让 agent 在授权前就知道「我还剩多少」，需要 ADR-0002 的 `active_holds` 之外的新机制（future work）。
+- 备选：b) 网关记住「intent → hold」的关联，捕获时**结算**授权那个 hold（语义最漂亮）；c) 授权只 hold 不 commit，靠 TTL 回收。
+- 为什么不选 b（本版）：需要网关从**上游响应体**里解析 `payment_intent_id` 并维护跨调用的关联状态，还要处理 intent 过期 / 取消 / 部分捕获——这是一套新状态机，规模够再开一个 ADR；而它带来的**安全性**与 A 相同（钱都在捕获处拦），差别只在「能不能提前看到占用」。
+- 为什么不选 c：它保留了「授权占额度」，于是单笔购买在流程窗口内**仍然按 2× 记账**，只是靠 TTL 自愈——观测与解释成本都比 A 高，而正确性反而依赖回收是否及时。
+- 决策：**候选，待你决策**（2026-10-16 提出）。选定后要同步：`src/gateway/policy/demo-policy.yaml` 的 bindings、`docs/mock-world.md` 的工具契约表、`docs/evaluation.md` 的 I2 口径（「恰好一次」的分母是捕获而不是授权）。
 
 ## 参考笔记（AI 记录，非决策本身）
 

@@ -39,7 +39,15 @@ __all__ = [
 
 GENESIS = "genesis"
 """链首的 `prev_hash`：一个不可能与真实哈希混淆的常量。"""
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+"""证据条目的 schema 版本。
+
+v2（2026-10-16）：加了 `suspected_adversarial`（威胁模型 T2 要求标记疑似对抗内容）。
+
+**字段增加会让旧链不可验**——`_entry_hash` 覆盖全部字段，旧行缺这个键时会被补上默认值，
+重算出来的哈希与存的不符。这不是缺陷，而是哈希链的固有性质，也正是这个常量的用途：
+本版只保证**同版本**链可验；换版本时重新生成证据（`runs/` 本来就在 `.gitignore` 里）。
+"""
 
 REPLAY_REQUIRED: dict[str, tuple[str, ...]] = {
     "pending": ("run_id", "seq", "session_id", "method", "decision", "args_digest", "policy_digest"),
@@ -67,6 +75,13 @@ class EvidenceEntry:
     outcome: str | None = None
     sanitized: bool = False
     """这次结果是否被净化过（ADR-0003 的 record_done 要记脱敏标记）。"""
+    suspected_adversarial: bool = False
+    """结果里是否**疑似**有对抗内容（威胁模型 T2 的标记）。
+
+    与 `sanitized` 刻意分开：`sanitized` 说的是「内容被改过」（PII 脱敏 / 丢块），
+    这一条说的是「内容没被改，但看起来像注入」。两者都**只标记、不改判定**——
+    净化不改变决策（I1）。
+    """
     args_digest: str | None = None
     result_digest: str | None = None
     policy_digest: str | None = None
@@ -242,9 +257,10 @@ class ChainLedger:
     def verify(self, run_id: str | None = None) -> VerifyReport:
         """不传 `run_id` 校验整条链（并交叉核对所有运行包）；传了就校验那一次运行。"""
         with self._lock:
-            if run_id is not None:
-                return self._verify_run(run_id)
-            return self._verify_chain()
+            report = self._verify_run(run_id) if run_id is not None else self._verify_chain()
+        # 把版本带进 detail：链验不过时，第一件要问的事就是「这条链是哪个版本写的」
+        # （字段增加会让旧版本的链重算哈希不符，见 SCHEMA_VERSION）。
+        return replace(report, detail=f"{report.detail}（schema v{SCHEMA_VERSION}）")
 
     def _verify_chain(self) -> VerifyReport:
         rows = _load_rows(self.chain_path)

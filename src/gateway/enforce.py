@@ -41,6 +41,7 @@ GENERIC_DENIAL = "policy_denied"
 ADAPTIVE_HINTS: dict[str, str] = {
     "amount_over_limit": "金额超过授权上限，换一个更小的金额再试",
     "amount_unreadable": "amount 必须是数字",
+    "amount_missing": "这次调用必须显式给出金额",
     "merchant_not_allowed": "这个商户不在授权范围内",
     "merchant_missing": "缺少 merchant_id",
     "category_not_allowed": "这个品类不在授权范围内",
@@ -229,7 +230,8 @@ class Enforcer:
                      policy_digest=self._policy.digest, budget_before=before,
                      budget_after=self._used(request.session_id),
                      result_digest=digest(sanitized.model_dump(by_alias=True).get("content")),
-                     sanitized=report.changed)
+                     sanitized=report.changed,
+                     suspected_adversarial=report.flagged_injection)
         telemetry.annotate("tools/call", tool=name, upstream=upstream.alias, decision="allow",
                            outcome=outcome, duration_ms=0.0)
         return sanitized
@@ -362,7 +364,10 @@ class Enforcer:
             return None
         amount = request.arguments.get(binding.amount_field)
         if amount is None:
-            return None
+            # 绑定声明了金额字段、参数里却没有——**fail-closed 拒掉**。
+            # 以前这里是「静默不占额度」，那是一个真实的 fail-open 洞：省略 amount 的
+            # capture 可以完全绕开预算（PSP 会按已授权的全额捕获）。威胁 T3。
+            raise _Denied(Decision(kind="deny", reason_code="amount_missing"))
         if isinstance(amount, bool) or not isinstance(amount, (int, float)):
             raise _Denied(Decision(kind="deny", reason_code="amount_unreadable"))
         mandate = basis.mandate
@@ -415,6 +420,7 @@ class Enforcer:
         budget_after: float | None = None,
         result_digest: str | None = None,
         sanitized: bool = False,
+        suspected_adversarial: bool = False,
     ) -> EvidenceEntry:
         entry = EvidenceEntry(
             phase="pending" if phase == "pending" else "done",
@@ -436,6 +442,7 @@ class Enforcer:
             budget_before=budget_before,
             budget_after=budget_after,
             sanitized=sanitized,
+            suspected_adversarial=suspected_adversarial,
         )
         return self._evidence.record_pending(entry) if phase == "pending" else self._evidence.record_done(entry)
 
