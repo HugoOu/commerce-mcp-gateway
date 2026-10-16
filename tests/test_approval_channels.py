@@ -1,35 +1,24 @@
 """审批的**通道选择**（W4 Step 1.2 / ADR-0006）——协议通道与 CLI 兜底通道。
 
-这个文件专测「通道怎么选、选错了会怎样」；越权通道被拦在 `test_gateway_enforcement.py`。
-两处的 harness 长得像，但都不到 40 行，等第三处出现时再抽 `conftest.py`（rule of three）。
+这个文件专测「通道怎么选、选错了会怎样」；越权通道被拦在 `test_gateway_enforcement.py`，
+对抗面在 `test_adversarial.py`。脚手架在 `harness.py`。
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import pathlib
-import socket
-import sys
 import time
-from collections.abc import AsyncIterator
 
 import mcp_types as types
 import pytest
-import uvicorn
+from harness import chain_rows, payload, running_gateway
 from mcp.client.client import Client
 from mcp.shared.exceptions import MCPError
 
-from gateway.app import Gateway
 from gateway.approval import DurableApprovalGate, channel_for
-from gateway.config import GatewayConfig, UpstreamSpec
 from gateway.decision import AuthorizationBasis, Decision, InterceptedRequest
-
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-MOCKS = ROOT / "src" / "mcp_servers"
-POLICY = ROOT / "src" / "gateway" / "policy" / "demo-policy.yaml"
-MANDATE = ROOT / "src" / "gateway" / "demo-mandate.yaml"
 
 REFUND = "merchant__request_refund"
 
@@ -169,61 +158,9 @@ def test_a_stale_pending_is_not_reused(tmp_path: pathlib.Path) -> None:
 # ---------------------------------------------------------------------- 端到端：两条通道
 
 
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def _config(tmp_path: pathlib.Path, port: int, *, approval_timeout: float) -> GatewayConfig:
-    return GatewayConfig(
-        upstreams=[
-            UpstreamSpec(
-                alias="merchant",
-                command=sys.executable,
-                args=[str(MOCKS / "merchant.py")],
-                env={"MOCK_MODE": "none", "MOCK_DELAY_S": "0.1"},
-            ),
-            UpstreamSpec(
-                alias="psp",
-                command=sys.executable,
-                args=[str(MOCKS / "psp.py")],
-                env={"PSP_MODE": "none", "MOCK_DELAY_S": "0.1"},
-            ),
-        ],
-        port=port,
-        evidence_dir=tmp_path / "evidence",
-        budget_path=tmp_path / "budget.sqlite",
-        approvals_path=tmp_path / "approvals.jsonl",
-        policy_path=POLICY,
-        mandate_path=MANDATE,
-        approval_timeout_seconds=approval_timeout,
-    )
-
-
-@contextlib.asynccontextmanager
-async def running_gateway(
-    tmp_path: pathlib.Path, *, approval_timeout: float = 3.0
-) -> AsyncIterator[tuple[Gateway, str]]:
-    config = _config(tmp_path, _free_port(), approval_timeout=approval_timeout)
-    async with Gateway(config) as gateway:
-        assert gateway.app is not None
-        server = uvicorn.Server(
-            uvicorn.Config(gateway.app, host=config.host, port=config.port, log_level="warning")
-        )
-        serving = asyncio.create_task(server.serve())
-        for _ in range(200):
-            if server.started:
-                break
-            await asyncio.sleep(0.05)
-        try:
-            yield gateway, gateway.url
-        finally:
-            server.should_exit = True
-            await serving
-
-
-async def _decide_like_a_human(gate: DurableApprovalGate, *, approved: bool, timeout: float = 3.0) -> str:
+async def _decide_like_a_human(
+    gate: DurableApprovalGate, *, approved: bool, timeout: float = 3.0
+) -> str:
     """模拟「人在另一个窗口敲 `python -m gateway approve <id>`」：等出待审批，然后投一条决定。"""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -235,17 +172,6 @@ async def _decide_like_a_human(gate: DurableApprovalGate, *, approved: bool, tim
     raise AssertionError("没有等到待审批记录")
 
 
-def _payload(result) -> tuple[bool, str]:
-    dump = result.model_dump(by_alias=True)
-    texts = [block.get("text", "") for block in dump.get("content", []) if isinstance(block, dict)]
-    return bool(dump.get("isError")), " | ".join(texts)
-
-
-def _chain(gateway: Gateway) -> list[dict]:
-    text = (gateway.config.evidence_dir / "chain.jsonl").read_text(encoding="utf-8")
-    return [json.loads(line) for line in text.splitlines() if line.strip()]
-
-
 async def test_cli_channel_approves_then_continues(tmp_path: pathlib.Path) -> None:
     """兜底通道：客户端**没有** elicitation 回调 → 只带 `request_state` 的挑战；CLI 批准后继续走链。"""
     async with running_gateway(tmp_path) as (gateway, url):
@@ -254,12 +180,12 @@ async def test_cli_channel_approves_then_continues(tmp_path: pathlib.Path) -> No
             result = await client.call_tool(REFUND, {"order_id": "ord_missing", "reason": "test"})
             await approver
 
-    is_error, text = _payload(result)
+    is_error, text = payload(result)
     assert is_error
     # 批准之后继续走链：上游说没有这个订单 → 工具失败，而不是策略拒绝
     assert "unknown_order" in text or "Error executing" in text
     assert "approval" not in text.lower()
-    assert "require_approval" in {row["decision"] for row in _chain(gateway)}
+    assert "require_approval" in {row["decision"] for row in chain_rows(gateway)}
 
 
 async def test_cli_channel_decline_is_a_deny(tmp_path: pathlib.Path) -> None:
@@ -270,7 +196,7 @@ async def test_cli_channel_decline_is_a_deny(tmp_path: pathlib.Path) -> None:
             result = await client.call_tool(REFUND, {"order_id": "ord_missing", "reason": "test"})
             await approver
 
-    is_error, text = _payload(result)
+    is_error, text = payload(result)
     assert is_error
     assert "approval_denied" in text
 
@@ -281,7 +207,7 @@ async def test_cli_channel_times_out_and_denies(tmp_path: pathlib.Path) -> None:
         async with Client(server=url, mode="auto") as client:
             result = await client.call_tool(REFUND, {"order_id": "ord_missing", "reason": "test"})
 
-    is_error, text = _payload(result)
+    is_error, text = payload(result)
     assert is_error
     assert "approval_timeout" in text
 
@@ -296,7 +222,7 @@ async def test_legacy_client_cannot_be_asked(tmp_path: pathlib.Path) -> None:
         async with Client(server=url, mode="legacy") as client:
             result = await client.call_tool(REFUND, {"order_id": "ord_missing", "reason": "test"})
 
-    is_error, text = _payload(result)
+    is_error, text = payload(result)
     assert is_error
     assert "approval_unavailable" in text
 
@@ -318,6 +244,7 @@ async def test_unknown_method_is_a_structural_error(tmp_path: pathlib.Path) -> N
 
 async def test_form_channel_still_works(tmp_path: pathlib.Path) -> None:
     """协议通道（主）没被兜底通道挤掉：广告了 elicitation 的客户端还是走 in-band 的 form。"""
+
     async def approve(*args: object, **kwargs: object) -> types.ElicitResult:
         return types.ElicitResult(action="accept", content={"approve": True})
 
@@ -325,7 +252,7 @@ async def test_form_channel_still_works(tmp_path: pathlib.Path) -> None:
         async with Client(server=url, mode="auto", elicitation_callback=approve) as client:
             result = await client.call_tool(REFUND, {"order_id": "ord_missing", "reason": "test"})
 
-    is_error, text = _payload(result)
+    is_error, text = payload(result)
     assert is_error
     assert "unknown_order" in text or "Error executing" in text
 

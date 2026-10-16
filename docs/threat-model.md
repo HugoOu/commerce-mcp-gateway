@@ -126,17 +126,17 @@
 
 ## 汇总表
 
-| 威胁 | 依据（案例 / 报告 / 研究） | 挂点 | 阻断手段 | 对抗用例（W4） |
+| 威胁 | 依据（案例 / 报告 / 研究） | 挂点 | 阻断手段 | 对抗用例（W4，已落地） |
 | --- | --- | --- | --- | --- |
-| T1 注解不可信 | MCP schema 的 hint 定义；Invariant 工具投毒（2025-04） | policy / enforce | 授权只认 ground truth；hint 只能收紧 | 上游声明 `readOnlyHint=true` 的扣款工具仍必须预留预算（断言 deny 或 require_approval） |
-| T2 结果注入 | Supabase MCP（2025-07）；OWASP Prompt Injection；CaMeL / AgentDojo | sanitize / evidence | 净化不改决策；标 `suspected_adversarial`；只读不算保护 | mock 商户返回「忽略之前的指令…」→ 断言被净化、被标记，且后续调用仍过策略 |
-| T3 越权与超额 | AP2 mandate；规格 Scope Minimization；`resources/list` 可按授权变化 | identity / policy / budget / enforce | deny-by-default；URI 过滤；与不存在同形 | ① 白名单外工具 → deny；② 金额 100.01 对上限 100 → deny；③ 越界 URI → `-32602` 且与不存在无差别 |
-| T4 confused deputy | 规格 Confused Deputy + Token Passthrough 的 MUST NOT；ACP 的不暴露凭证 | identity / frontdoor / enforce | 凭证自持；最小 scope；audience 校验 | 用低权限 token 触发扣款 → 断言上游看到的是网关凭证、证据里记的是调用方身份 |
-| T5 并发重复花费 | Stripe 的授权 / 捕获与幂等键；AP2 的两阶段 mandate | budget / evidence | reserve→commit/release + 幂等键 + TTL | N=50 并发（I2）；同一 `tool_call_id` 重试两次 → 只扣一次 |
-| T6 推送旁路 | 规格订阅能力；Invariant 的侧信道外泄演示 | frontdoor / sanitize / evidence | 通知与响应同一套净化与记证；做不到就不声明 | mock 在订阅通知里塞注入串 → 断言被净化或丢弃，且被记证 |
-| T7 游标伪造 | 规格 State Handle Hijacking；ADR-0013 的自签游标 | frontdoor / policy | 游标自签 + 授权指纹 + 过期；验签失败拒绝 | 篡改 `nextCursor` → 结构性错误 |
-| T8 缓存串号 | 规格 `cacheScope` 语义；`resources/list` 可按授权变化 | 缓存层 / identity | 按授权指纹分键；`public` 收紧为 `private` | 两个不同 scope 的会话请求同一方法 → 断言结果不串 |
-| T9 拒绝留痕 | AP2 的 non-repudiable audit trail；《暂行办法》第十四条 | enforce / evidence | deny 也写链记录，且在返回前落盘 | deny 也必须产生一条链记录（含 `reason_code`），断言无空洞 |
+| T1 注解不可信 | MCP schema 的 hint 定义；Invariant 工具投毒（2025-04） | policy / enforce | 授权只认 ground truth；hint 只能收紧；出口**剥离**上游 hint | `test_adversarial.py::test_t1_a_lying_read_only_hint_buys_nothing`（钱照样占额度 + 注解不透传）、`::test_t1_a_lying_hint_does_not_unlock_an_over_limit_payment` |
+| T2 结果注入 | Supabase MCP（2025-07）；OWASP Prompt Injection；CaMeL / AgentDojo | sanitize / evidence | 净化不改决策；标 `suspected_adversarial`；只读不算保护 | `::test_t2_injected_content_does_not_change_any_decision`；**标记那一半还没做到**：`::test_t2_injection_should_be_marked_in_the_evidence` 是 strict xfail（`Sanitizer` 算出 `flagged_injection`，但证据条目里没有这个字段——要动 schema，见 `w4-plan.md`） |
+| T3 越权与超额 | AP2 mandate；规格 Scope Minimization；`resources/list` 可按授权变化 | identity / policy / budget / enforce | deny-by-default；URI 过滤；与不存在同形 | `::test_t3_all_three_channels_are_blocked_in_one_run`（批量 3/3）+ `test_gateway_enforcement.py` 的逐条版 |
+| T4 confused deputy | 规格 Confused Deputy + Token Passthrough 的 MUST NOT；ACP 的不暴露凭证 | identity / frontdoor / enforce | 凭证自持；最小 scope；audience 校验 | `::test_t4_the_downstream_token_never_reaches_the_upstream`（AST：转发只带 (工具名, 参数)）、`::test_t4_a_read_only_token_cannot_spend`（线上通用码 / 链上 `scope_denied`） |
+| T5 并发重复花费 | Stripe 的授权 / 捕获与幂等键；AP2 的两阶段 mandate | budget / evidence | reserve→commit/release + 幂等键 + TTL | N=50 并发在 `test_budget.py` 与 `eval/w3_metrics.py`；同参数两次调用的**已知缺口**：`::test_t5_two_identical_calls_should_get_distinct_call_ids`（strict xfail） |
+| T6 推送旁路 | 规格订阅能力；Invariant 的侧信道外泄演示 | frontdoor / sanitize / evidence | 通知与响应同一套净化与记证；**做不到就不声明** | `::test_t6_no_push_channel_is_promised`。**与原计划的差别**：原写的是「通知里塞注入串 → 断言被净化」，本版选择**根本不声明 `subscribe`**（ADR-0012），所以这条通道不存在；真要做通知过滤是 future work |
+| T7 游标伪造 | 规格 State Handle Hijacking；ADR-0013 的自签游标 | frontdoor / policy | 游标自签 + 授权指纹 + 过期；验签失败拒绝 | `::test_t7_no_upstream_cursor_is_passed_through`。**与原计划的差别**：自签游标（ADR-0013）是 future work，本版的可测断言是「网关自己构造结果，不搬运上游游标」 |
+| T8 缓存串号 | 规格 `cacheScope` 语义；`resources/list` 可按授权变化 | 缓存层 / identity | 按授权指纹分键；`public` 收紧为 `private` | `::test_t8_cache_scope_is_private_and_lists_do_not_cross`（两个 scope 的会话：一个看见工具、一个看不见） |
+| T9 拒绝留痕 | AP2 的 non-repudiable audit trail；《暂行办法》第十四条 | enforce / evidence | deny 也写链记录，且在返回前落盘 | `::test_t9_every_deny_leaves_a_reason_code_in_the_chain` |
 
 ## 未采纳（留档，2026-10-15 你筛选后未纳入本版）
 

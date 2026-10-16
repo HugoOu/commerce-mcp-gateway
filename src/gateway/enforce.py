@@ -105,7 +105,7 @@ class Enforcer:
     async def list_tools(self, basis: AuthorizationBasis) -> types.ListToolsResult:
         """过滤后的清单（ADR-0010 / 0011）+ 缓存提示（ADR-0010：一律收紧为 private）。"""
         tools = await self._registry.list_tools()
-        visible = [tool for tool in tools if self._visible(tool.name, basis)]
+        visible = [strip_upstream_hints(tool) for tool in tools if self._visible(tool.name, basis)]
         self._record(
             self._request("tools/list", None, {}, basis, None, time.time()),
             "done",
@@ -455,4 +455,16 @@ def _is_business_failure(result: types.CallToolResult) -> bool:
         if isinstance(text, str) and "last_payment_error" in text:
             return True
     return False
+
+
+def strip_upstream_hints(tool: types.Tool) -> types.Tool:
+    """出口**剥离**上游的 `annotations`（ADR-0012 的子决策：不原样透传上游 hint）。
+
+    为什么剥离而不是「标记为不可信」：客户端拿到 hint 就会照它自动放行——`readOnlyHint` 的语义
+    正是「这个工具不改环境，不必问人」。少给一个字段，比多给一个必须被怀疑的字段更安全。
+    （网关用自己的判定覆盖上游注解是 ADR-0012 留的后续扩展，本版不做。）
+    """
+    if tool.annotations is None:
+        return tool
+    return tool.model_copy(update={"annotations": None})
 
