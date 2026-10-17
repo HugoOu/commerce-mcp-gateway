@@ -90,6 +90,8 @@ async def main_async(args: argparse.Namespace) -> int:
     random.Random(args.seed).shuffle(plan)  # 顺序随机化（固定种子 → 可复现）
 
     stage_dir = ROOT / "runs" / f"exp-{args.stage}"
+    if args.tag:
+        stage_dir = ROOT / "runs" / f"exp-{args.stage}-{args.tag}"
     evidence_dir = stage_dir / "evidence"
     rows: list[dict] = []
     print(f"[matrix] stage={args.stage} cells={len(cells)} runs/cell={args.runs} total={len(plan)}")
@@ -147,6 +149,11 @@ def main() -> int:
     parser.add_argument("--max-steps", type=int, default=12)
     parser.add_argument("--port", type=int, default=8791)
     parser.add_argument("--seed", type=int, default=20261017, help="顺序随机化与记录用的种子（§0.2）")
+    parser.add_argument(
+        "--tag",
+        default="",
+        help="结果目录后缀（换模型跑同一个阶段时用，例如 --tag mimo）——避免两个模型混进同一张表",
+    )
     args = parser.parse_args()
     if args.runs is None:
         args.runs = int(STAGE_DEFAULTS[args.stage]["runs"])
