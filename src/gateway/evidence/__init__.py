@@ -402,7 +402,10 @@ class ChainLedger:
         rows = _load_rows(self.chain_path)
         ok, broken_at, detail = _verify_rows(rows)
         if not ok:
-            return VerifyReport(ok=False, entries=len(rows), broken_at=broken_at, detail=detail)
+            return VerifyReport(
+                ok=False, entries=len(rows), broken_at=broken_at,
+                detail=detail + self._version_hint(),
+            )
 
         on_chain = {str(row["entry_hash"]) for row in rows}
         for manifest_path in sorted(self.runs_dir.glob("*.manifest.json")):
@@ -415,6 +418,29 @@ class ChainLedger:
                     detail=f"{manifest_path.name} 里有 {len(missing)} 条记录不在链上（链被截断？）",
                 )
         return VerifyReport(ok=True, entries=len(rows), detail="链自洽，且所有运行包都能在链上找到")
+
+    def _version_hint(self) -> str:
+        """链验不过时，先排除「版本不同」这个最常见的原因（ADR-0028 的字段演进）。
+
+        哈希覆盖全部字段，所以**加一个字段就会让旧版本的链重算不符**——这时报「被改过？」
+        会把人引向错误的方向（实测踩过：504 条链在 broken_at=0 就断了，而链其实没被动过）。
+        """
+        versions: set[int] = set()
+        for manifest_path in self.runs_dir.glob("*.manifest.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(manifest.get("schema"), int):
+                versions.add(manifest["schema"])
+        older = sorted(v for v in versions if v != SCHEMA_VERSION)
+        if not older:
+            return ""
+        return (
+            f"；注意：运行包里有 schema v{older} 写的链，而本版是 v{SCHEMA_VERSION}——"
+            "哈希覆盖全部字段，加字段会让旧链重算不符（ADR-0028 的预期行为，不是篡改）。"
+            "做实验请用新的证据目录。"
+        )
 
     def _verify_run(self, run_id: str) -> VerifyReport:
         run_path = self._run_path(run_id)
