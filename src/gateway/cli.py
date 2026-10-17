@@ -82,6 +82,8 @@ def demo_config(args: argparse.Namespace) -> GatewayConfig:
         policy_path=pathlib.Path(args.policy),
         mandate_path=pathlib.Path(args.mandate),
         approval_timeout_seconds=args.approval_timeout,
+        sanitize=not args.no_sanitize,
+        sanitize_redact=not args.no_redact,
     )
 
 
@@ -224,6 +226,10 @@ def shared_flags() -> argparse.ArgumentParser:
     shared.add_argument("--merchant-mode", default=argparse.SUPPRESS)
     shared.add_argument("--psp-mode", default=argparse.SUPPRESS)
     shared.add_argument("--approval-timeout", type=float, default=argparse.SUPPRESS)
+    shared.add_argument("--no-sanitize", action="store_true", default=argparse.SUPPRESS,
+                        help="关闭注入筛查（曲线横轴的第一档）")
+    shared.add_argument("--no-redact", action="store_true", default=argparse.SUPPRESS,
+                        help="只标记不遮盖 PII（曲线横轴的中间档）")
     return shared
 
 
@@ -240,6 +246,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--psp-mode", default="none", help="mock PSP 的故障注入模式")
     parser.add_argument("--approval-timeout", type=float, default=DEFAULT_APPROVAL_TIMEOUT,
                         help="等人工审批的秒数")
+    parser.add_argument("--no-sanitize", action="store_true", help="关闭注入筛查（筛查三档之一）")
+    parser.add_argument("--no-redact", action="store_true", help="只标记不遮盖 PII（筛查三档之一）")
     shared = shared_flags()
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("serve", parents=[shared], help="起网关（默认演示配置）")

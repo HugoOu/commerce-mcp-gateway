@@ -47,3 +47,17 @@ def test_disabled_sanitizer_is_a_noop() -> None:
     assert cleaned.content[0].text == "a@b.com"
     assert not report.changed
 
+
+def test_redact_off_detects_but_does_not_change() -> None:
+    """筛查三档的中间档（`redact=False`）：检测到 PII 但**不改内容**，所以 `changed` 仍是 False。
+
+    这一档存在的理由就是它要能单独测：曲线横轴是「关闭 / 只标记 / 标记 + 遮盖」，
+    而「只标记」必须与「标记 + 遮盖」在**内容**上可区分——否则那一档没有自变量意义。
+    """
+    cleaned, report = Sanitizer(redact=False).apply(_result("write to a@b.com"))
+    assert "a@b.com" in cleaned.content[0].text
+    assert report.pii_hits == ("pii:email",)
+    assert report.redactions == ()
+    assert not report.changed
+
+

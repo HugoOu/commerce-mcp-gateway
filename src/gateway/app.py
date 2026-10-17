@@ -36,7 +36,7 @@ class Gateway:
             config.identity,
             mandate=load_mandate(config.mandate_path) if config.mandate_path else None,
         )
-        self.sanitizer = Sanitizer(enabled=config.sanitize)
+        self.sanitizer = Sanitizer(enabled=config.sanitize, redact=config.sanitize_redact)
         self.approval = DurableApprovalGate(config.approvals_path, timeout_seconds=config.approval_timeout_seconds)
         self.registry = UpstreamRegistry(config.upstreams)
         self.enforcer = Enforcer(

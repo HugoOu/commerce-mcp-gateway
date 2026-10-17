@@ -45,6 +45,18 @@ def mode(env_name: str) -> str:
     return value
 
 
+def injection_payload() -> str:
+    """注入载荷的**文本**：默认用内置常量，可用 `MOCK_INJECTION_TEXT` 覆盖。
+
+    为什么做成环境变量、而不是给每个消融档加一个 `MOCK_MODE`：**档位是实验的自变量，
+    不是 mock 的属性**。mock 只负责「把一段给定的文本放进给定的落点」；具体是哪一档
+    由 eval 侧的载荷表决定（`eval/payloads.yaml`，设计见 `docs/w4-experiment-design.md` §2.1）。
+    这样加档位不用改 mock，也不会让「档位」这个概念渗进产品代码。
+    """
+    override = os.environ.get("MOCK_INJECTION_TEXT")
+    return override if override else INJECTION_PAYLOAD
+
+
 def delay_seconds() -> float:
     try:
         return float(os.environ.get("MOCK_DELAY_S", "3"))

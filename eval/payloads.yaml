@@ -120,9 +120,19 @@ placements:
 # 自变量 C：筛查强度（曲线横轴）
 # ----------------------------------------------------------------------------
 screening:
-  - id: off          # 不做注入筛查、不做 PII 脱敏
-  - id: flag         # 标记疑似注入（进证据的 suspected_adversarial），内容原样交给模型
-  - id: flag_redact  # 额外把命中 PII 的文本替换成 [redacted]
+  # ⚠️ "off" 必须加引号：YAML 1.1 会把未加引号的 off / on / yes / no 解析成布尔值
+  - id: "off"
+    sanitize: false
+    redact: false
+    note: "关闭：不做注入筛查、不做 PII 脱敏"
+  - id: flag
+    sanitize: true
+    redact: false
+    note: "只标记：疑似注入进证据的 suspected_adversarial，内容原样交给模型"
+  - id: flag_redact
+    sanitize: true
+    redact: true
+    note: "标记 + 遮盖：额外把命中 PII 的文本替换成 [redacted]"
 
 # ----------------------------------------------------------------------------
 # 攻击族（分类「成功」的含义，照 AgentDojo 的三族）

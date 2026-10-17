@@ -39,6 +39,8 @@ class SanitizeReport:
 
     redactions: tuple[str, ...] = ()
     """**真的改了内容**的项（PII 脱敏）。注入命中**不算**——那只是标记，内容一个字没动。"""
+    pii_hits: tuple[str, ...] = ()
+    """检测到的 PII（«redact=False» 时也会记——那是「只标记不遮盖」那一档，见 §2 的筛查三档）。"""
     injection_hits: tuple[str, ...] = ()
     """疑似注入的命中项（只标记、不改内容）。"""
     flagged_injection: bool = False
@@ -58,6 +60,8 @@ class SanitizeReport:
 @dataclass
 class Sanitizer:
     enabled: bool = True
+    redact: bool = True
+    """是否**真的替换**命中 PII 的文本（False = 只标记不遮盖，曲线横轴的中间那档）。"""
     audience: str = "assistant"
     """只有 `audience` 含这一项的块才交给模型（规格的 `Annotations.audience` 语义）。"""
 
@@ -77,7 +81,8 @@ class Sanitizer:
         for name, pattern in PII_PATTERNS:
             if pattern.search(value):
                 pii.append(f"pii:{name}")
-                value = pattern.sub(REDACTION, value)
+                if self.redact:
+                    value = pattern.sub(REDACTION, value)
         return value, pii, injection, bool(injection)
 
     def apply(self, result: types.CallToolResult) -> tuple[types.CallToolResult, SanitizeReport]:
@@ -85,6 +90,7 @@ class Sanitizer:
         if not self.enabled:
             return result, SanitizeReport()
         redactions: list[str] = []
+        pii_hits: list[str] = []
         injections: list[str] = []
         flagged = False
         kept: list[types.ContentBlock] = []
@@ -97,13 +103,16 @@ class Sanitizer:
             text = getattr(block, "text", None)
             if isinstance(text, str):
                 cleaned, pii, injection, suspicious = self.text(text)
-                redactions.extend(pii)
+                pii_hits.extend(pii)
+                if self.redact:
+                    redactions.extend(pii)
                 injections.extend(injection)
                 flagged = flagged or suspicious
                 block = block.model_copy(update={"text": cleaned})
             kept.append(block)
         report = SanitizeReport(
             redactions=tuple(sorted(set(redactions))),
+            pii_hits=tuple(sorted(set(pii_hits))),
             injection_hits=tuple(sorted(set(injections))),
             flagged_injection=flagged,
             dropped_blocks=dropped,

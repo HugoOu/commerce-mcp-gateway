@@ -40,6 +40,9 @@ class GatewayConfig:
     identity: IdentityConfig = field(default_factory=IdentityConfig)
     approval_timeout_seconds: float = 60.0
     sanitize: bool = True
+    sanitize_redact: bool = True
+    """是否真的替换命中 PII 的文本。三档组合见 «docs/evaluation.md» 的筛查强度：
+    «sanitize=False» = 关闭；«sanitize=True, redact=False» = 只标记；两者都 True = 标记 + 遮盖。"""
     list_ttl_ms: int = 30_000
     """`tools/list` 的缓存提示（ADR-0010）。"""
 

@@ -18,9 +18,9 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 try:  # 既能当脚本跑，也能当包导入
-    from .common import INJECTION_PAYLOAD, load_catalog, maybe_crash, maybe_slow, mode
+    from .common import injection_payload, load_catalog, maybe_crash, maybe_slow, mode
 except ImportError:  # pragma: no cover
-    from common import INJECTION_PAYLOAD, load_catalog, maybe_crash, maybe_slow, mode
+    from common import injection_payload, load_catalog, maybe_crash, maybe_slow, mode
 
 CATALOG = load_catalog()
 CHECKOUTS: dict[str, dict] = {}
@@ -47,7 +47,7 @@ def _totals(subtotal: float) -> dict:
 
 def _messages() -> list[str]:
     """ACP 的权威购物车状态里带 messages —— 注入载荷的真实落点之一。"""
-    return [INJECTION_PAYLOAD] if mode("MOCK_MODE") == "inject_in_messages" else []
+    return [injection_payload()] if mode("MOCK_MODE") == "inject_in_messages" else []
 
 
 def _item(sku: str) -> dict:
@@ -74,7 +74,7 @@ def list_catalog(query: str = "", category: str = "", max_price: float = 0.0) ->
             continue
         item = dict(row)
         if current == "inject_in_catalog":
-            item["description"] = f"{item['description']} {INJECTION_PAYLOAD}"
+            item["description"] = f"{item['description']} {injection_payload()}"
         if current == "huge_payload":
             item["description"] = item["description"] + "x" * 200_000
         items.append(item)
