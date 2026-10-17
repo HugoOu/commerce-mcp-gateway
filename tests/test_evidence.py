@@ -183,3 +183,20 @@ def test_verify_missing_run_is_reported(tmp_path: pathlib.Path) -> None:
     assert not report.ok
     assert "没有这次运行的记录" in report.detail
 
+def test_two_runs_share_one_evidence_directory(tmp_path: pathlib.Path) -> None:
+    """**回归**：一个证据目录里跑多次运行，全局链必须仍然自洽。
+
+    这条 bug 是 W4 跑 S0 时暴露的：`_append` 从**运行文件**取 prev_hash，于是同一个证据目录里
+    第二次运行的第一条会接在 genesis 上，链在边界处断开（实测 `broken_at=11`，345 条）。
+    单运行进程（每次演示一个 run_id）永远看不出来——**只有实验这种「多运行共用目录」才会碰到**。
+    """
+    ledger = _ledger(tmp_path)
+    _seed(ledger)                                  # 第一次运行
+    ledger.record_pending(_entry(seq=1, run_id="r2", tool_call_id="t2"))   # 第二次运行
+    ledger.record_done(_entry(seq=1, run_id="r2", phase="done", outcome="ok", result_digest="d2"))
+
+    report = ledger.verify()
+    assert report.ok, report.detail
+    assert ledger.verify("r2").ok, ledger.verify("r2").detail
+
+

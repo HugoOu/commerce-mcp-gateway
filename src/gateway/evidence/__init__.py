@@ -216,11 +216,16 @@ def _load_rows(path: pathlib.Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def _verify_rows(rows: Sequence[dict[str, Any]]) -> tuple[bool, int | None, str]:
+def _verify_rows(
+    rows: Sequence[dict[str, Any]], *, anchors: set[str] | None = None
+) -> tuple[bool, int | None, str]:
     """链自洽检查：`prev_hash` 接得上，且每条 `entry_hash` 重算一致。"""
     previous = GENESIS
     for index, row in enumerate(rows):
-        if row.get("prev_hash") != previous:
+        # 校验**单个运行包**时，它的第一条接的是链上另一条记录（多运行共用一个证据目录，
+        # 见 `_append`）。所以允许首条锚定到链上真实存在的某个 entry_hash。
+        anchored = index == 0 and bool(anchors) and row.get("prev_hash") in (anchors or set())
+        if row.get("prev_hash") != previous and not anchored:
             return False, index, f"第 {index} 条的 prev_hash 接不上前一条"
         try:
             recomputed = _entry_hash(_entry_from_row(row))
@@ -278,7 +283,11 @@ class ChainLedger:
                 if row.get("seq") == entry.seq and row.get("phase") == entry.phase:
                     raise ValueError(f"同一 (run, seq, phase) 不能重复记录：{entry.run_id}#{entry.seq}/{entry.phase}")
 
-            previous = rows[-1]["entry_hash"] if rows else GENESIS
+            # prev_hash 必须来自**全局链**的最后一条，不是本运行文件的最后一条。
+            # 取错来源时，一个证据目录里跑第二次运行，它的第一条就会接在 genesis 上——
+            # 单运行的进程看不出来，S0（25 次运行共用一个证据目录）当场断成 broken_at=11。
+            chain = _load_rows(self.chain_path)
+            previous = chain[-1]["entry_hash"] if chain else GENESIS
             stored = replace(entry, prev_hash=previous)
             stored = replace(stored, entry_hash=_entry_hash(stored))
             line = json.dumps(asdict(stored), ensure_ascii=False) + "\n"
@@ -447,7 +456,9 @@ class ChainLedger:
         if not run_path.exists():
             return VerifyReport(ok=False, entries=0, detail=f"没有这次运行的记录：{run_path}")
         rows = _load_rows(run_path)
-        ok, broken_at, detail = _verify_rows(rows)
+        on_chain = {str(row["entry_hash"]) for row in _load_rows(self.chain_path)}
+        # 首条允许锚定到链上（多运行共用证据目录时，它接的是上一次运行的最后一条）
+        ok, broken_at, detail = _verify_rows(rows, anchors=on_chain)
         if not ok:
             return VerifyReport(ok=False, entries=len(rows), broken_at=broken_at, detail=detail)
 
@@ -464,7 +475,6 @@ class ChainLedger:
             if manifest.get("merkle_root") != _merkle_root(hashes):
                 return VerifyReport(ok=False, entries=len(rows), detail="Merkle 根不符")
 
-        on_chain = {str(row["entry_hash"]) for row in _load_rows(self.chain_path)}
         missing = [row.get("seq") for row in rows if str(row["entry_hash"]) not in on_chain]
         if missing:
             return VerifyReport(ok=False, entries=len(rows), detail=f"这些记录不在全局链上：{missing}")
