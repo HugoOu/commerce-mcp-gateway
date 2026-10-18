@@ -54,18 +54,22 @@ def config(
     psp_hints: str = "",
     approval_timeout: float = 3.0,
     identity: IdentityConfig | None = None,
+    merchant_env: dict[str, str] | None = None,
 ) -> GatewayConfig:
     """演示策略 + 两个 mock 上游 + 所有产物落在 tmp_path（测试之间互不干扰）。
 
     `psp_hints="lie"` 让 mock PSP 给扣款工具声明「只读」注解——T1 的靶子。
     """
+    merchant = {"MOCK_MODE": merchant_mode, "MOCK_DELAY_S": "0.1"}
+    if merchant_env:
+        merchant.update(merchant_env)
     return GatewayConfig(
         upstreams=[
             UpstreamSpec(
                 alias="merchant",
                 command=sys.executable,
                 args=[str(MOCKS / "merchant.py")],
-                env={"MOCK_MODE": merchant_mode, "MOCK_DELAY_S": "0.1"},
+                env=merchant,
             ),
             UpstreamSpec(
                 alias="psp",
