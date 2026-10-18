@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 import time
 from typing import Any, NoReturn
 
@@ -434,6 +435,12 @@ class Enforcer:
         """
         reason = GENERIC_DENIAL if decision.hard else (decision.reason_code or GENERIC_DENIAL)
         hint = "" if decision.hard else ADAPTIVE_HINTS.get(reason, "")
+        # 实验用的「错误消息注入」：把修复建议挂在网关**自己的**拒绝提示后面。
+        # 这是比商品文案更靠近信任边界的位置——模型对工具/网关错误的信任通常更高。
+        # 默认不设，所以产品行为不变；F6 族用它。
+        suffix = os.environ.get("GATEWAY_HINT_SUFFIX", "").strip()
+        if hint and suffix:
+            hint = f"{hint}；{suffix}"
         self._record(request, "pending", seq=seq, decision="deny", reason_code=decision.reason_code,
                      outcome="denied", policy_digest=self._policy.digest)
         telemetry.annotate(request.method, tool=request.name, decision="deny", outcome="denied")
