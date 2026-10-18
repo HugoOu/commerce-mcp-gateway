@@ -86,7 +86,14 @@ class Sanitizer:
         return value, pii, injection, bool(injection)
 
     def apply(self, result: types.CallToolResult) -> tuple[types.CallToolResult, SanitizeReport]:
-        """净化工具结果。非文本块原样保留（W3 只处理文本）。"""
+        """净化工具结果：`content` 文本块 + `structuredContent` 的字符串叶子。
+
+        为什么要走两处：ADR-0005 的实测结论是 SDK 有「文本 JSON」与「structuredContent」
+        两种形态，净化必须同时覆盖。F8 的商户换货通知正好只出现在 structuredContent 里，
+        旧实现漏掉了它（证据里 `suspected_adversarial=0`），这次补上。
+
+        非文本块原样保留（W3 只处理文本）。
+        """
         if not self.enabled:
             return result, SanitizeReport()
         redactions: list[str] = []
@@ -117,5 +124,52 @@ class Sanitizer:
             flagged_injection=flagged,
             dropped_blocks=dropped,
         )
-        return result.model_copy(update={"content": kept}), report
+        structured, structured_report = self._structured(result.structured_content)
+        merged = SanitizeReport(
+            redactions=tuple(sorted(set(report.redactions) | set(structured_report.redactions))),
+            pii_hits=tuple(sorted(set(report.pii_hits) | set(structured_report.pii_hits))),
+            injection_hits=tuple(sorted(set(report.injection_hits) | set(structured_report.injection_hits))),
+            flagged_injection=report.flagged_injection or structured_report.flagged_injection,
+            dropped_blocks=report.dropped_blocks,
+        )
+        return result.model_copy(update={"content": kept, "structured_content": structured}), merged
+
+    def _structured(self, value: object) -> tuple[object, SanitizeReport]:
+        """递归处理 `structuredContent` 里的字符串叶子，**不改结构**（键名与数值原样保留）。"""
+        if isinstance(value, str):
+            cleaned, pii, injection, suspicious = self.text(value)
+            return cleaned, SanitizeReport(
+                redactions=tuple(pii) if self.redact else (),
+                pii_hits=tuple(pii),
+                injection_hits=tuple(injection),
+                flagged_injection=suspicious,
+            )
+        if isinstance(value, dict):
+            out: dict[object, object] = {}
+            parts: list[SanitizeReport] = []
+            for key, item in value.items():
+                cleaned, report = self._structured(item)
+                out[key] = cleaned
+                parts.append(report)
+            return out, _merge(parts)
+        if isinstance(value, list):
+            out_list: list[object] = []
+            parts = []
+            for item in value:
+                cleaned, report = self._structured(item)
+                out_list.append(cleaned)
+                parts.append(report)
+            return out_list, _merge(parts)
+        return value, SanitizeReport()
+
+
+def _merge(parts: list[SanitizeReport]) -> SanitizeReport:
+    """把子树的报告并起来：命中项去重排序，任一子树可疑就算可疑。"""
+    return SanitizeReport(
+        redactions=tuple(sorted({item for part in parts for item in part.redactions})),
+        pii_hits=tuple(sorted({item for part in parts for item in part.pii_hits})),
+        injection_hits=tuple(sorted({item for part in parts for item in part.injection_hits})),
+        flagged_injection=any(part.flagged_injection for part in parts),
+        dropped_blocks=sum(part.dropped_blocks for part in parts),
+    )
 
