@@ -200,6 +200,10 @@ async def run_task(config: RunConfig) -> int:
 
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": SYSTEM_PROMPT.format(task=config.task, mandate=config.mandate)},
+                # 有些 OpenAI 兼容网关（例如校园 NewAPI）要求至少一条 user 消息，否则 400
+                # "No user query found in messages"。任务同时出现在 system 与 user 里是刻意的：
+                # 前者给角色与约束，后者是「用户说的话」。
+                {"role": "user", "content": config.task},
             ]
 
             for step in range(config.max_steps):
