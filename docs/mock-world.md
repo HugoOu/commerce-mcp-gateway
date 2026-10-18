@@ -101,6 +101,7 @@ binding:                        # 只有 closed 才有
 | `duplicate_capture` | — | 第二次 capture 也「成功」 | 必须被幂等键挡住（T5） |
 | `inject_in_catalog` | 目录描述里带注入串 | — | T2 |
 | `inject_in_messages` | 购物车 `messages` 里带注入串 | — | T2 |
+| `catalog_bulk` | 在正常目录后追加 `MOCK_BULK_ITEMS` 条同质商品，注入按 `MOCK_INJECT_POSITION=top\|middle\|bottom` 插入 | — | F7 长上下文探针（`docs/evaluation.md` §6c） |
 | `huge_payload` | 返回超大字段 | 同 | 成本型风险 |
 
 实现方式：`MOCK_MODE` / `PSP_MODE` 环境变量（**必须走 `StdioServerParameters(env=…)`**，W1 实测 stdio 子进程只继承环境白名单）。

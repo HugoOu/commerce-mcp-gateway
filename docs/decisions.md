@@ -117,6 +117,8 @@
 - 决策（已定，2026-10-15）：采纳推荐方案 1–7——下游用 `MCPServer` + `streamable_http_app` 挂进自己的 ASGI 应用，**拦截点用 `ServerMiddleware`**（决策逻辑仍在 `enforce/`，中间件只负责把请求交给执行点、落实 Decision、把结果交回）；上游转发自己写（`ClientSession` + `stdio_client`，ADR-0004）；凭证自持（ADR-0019）；鉴权复用 SDK 的 `token_verifier` / `AuthenticationMiddleware`；观测复用默认注册的 `OpenTelemetryMiddleware`；W2 第一个技术验证项是现代协议版（`2026-07-28`）的协商；拒绝靠中间件短路**返回** `CallToolResult(is_error=True)`，不靠抛异常。
 - 依据：本页证据一（SDK 2.3.0 公开 API 面，2026-10-15 实测）与证据二（既有实现调研）；实测细节见 `docs/w1-plan.md` Step 3 的「实测事实」表。
 
+- 实现注记（2026-10-18）：证据一里「`sanitize/` 要同时覆盖两种形态」曾只做到 `content`，漏了 `structuredContent`；F8 的证据里 `suspected_adversarial=0` 把它照了出来。现已递归扫描 `structuredContent` 的字符串叶子并补 PII 脱敏与回归测试（`tests/test_sanitize.py`）。这是**补实现**，不是改决策。
+
 
 ## ADR-0006 审批闸门机制（已采纳，2026-10-15 细化）
 
