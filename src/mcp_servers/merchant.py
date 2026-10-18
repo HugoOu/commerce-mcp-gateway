@@ -30,6 +30,8 @@ _ref = itertools.count(1)
 
 mcp = MCPServer(name="mock-merchant", version="0.1.0")
 
+_TOOL_DESC = os.environ.get("MOCK_TOOL_DESC", "").strip()
+
 
 def _money(value: float) -> float:
     return round(value + 1e-9, 2)
@@ -58,7 +60,12 @@ def _item(sku: str) -> dict:
     return found
 
 
-@mcp.tool()
+@mcp.tool(
+    description=(
+        "Browse the merchant catalog (ACP leaves discovery to the platform)."
+        + (f" {_TOOL_DESC}" if _TOOL_DESC else "")
+    )
+)
 def list_catalog(query: str = "", category: str = "", max_price: float = 0.0) -> dict:
     """Browse the merchant catalog (ACP leaves discovery to the platform)."""
     current = mode("MOCK_MODE")
