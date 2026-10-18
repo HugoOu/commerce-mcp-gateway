@@ -14,11 +14,13 @@ import math
 import pathlib
 import random
 from collections.abc import Callable, Sequence
+from fractions import Fraction
 from typing import Any
 
 __all__ = [
     "bootstrap_ci",
     "clopper_pearson_upper",
+    "fisher_exact_two_sided",
     "mean",
     "median",
     "quantile",
@@ -63,6 +65,32 @@ def rule_of_three(n: int) -> float:
     if n <= 0:
         raise ValueError("n 必须为正")
     return 3.0 / n
+
+
+def fisher_exact_two_sided(a: int, b: int, c: int, d: int) -> float:
+    """2×2 表的双侧 Fisher 精确检验 p 值。
+
+    表：`[[a, b], [c, d]]`（行 = 两组，列 = 成功/失败）。固定边际后，成功数服从
+    超几何分布；双侧 p 是「所有概率不大于观测表概率的表」的概率之和。
+
+    用 `Fraction` 比较概率，避免浮点并列把某一项漏掉。样本量很小（评测里是 5–30），
+    所以暴力枚举所有可行表完全够用。
+    """
+    for name, value in (("a", a), ("b", b), ("c", c), ("d", d)):
+        if value < 0:
+            raise ValueError(f"{name} 必须非负")
+    n1 = a + b
+    successes, total = a + c, a + b + c + d
+    if total == 0:
+        raise ValueError("总样本量为 0")
+
+    def prob(x: int) -> Fraction:
+        return Fraction(math.comb(successes, x) * math.comb(total - successes, n1 - x), math.comb(total, n1))
+
+    low = max(0, n1 - (total - successes))
+    high = min(n1, successes)
+    observed = prob(a)
+    return float(sum(prob(x) for x in range(low, high + 1) if prob(x) <= observed))
 
 
 def mean(values: Sequence[float]) -> float:

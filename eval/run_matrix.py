@@ -37,6 +37,8 @@ STAGE_DEFAULTS: dict[str, dict[str, Any]] = {
     "S3": {"runs": 10, "levels": ["F1_prerequisite/L3"], "placements": ["catalog"], "screening": ["flag"]},
 }
 
+DEFAULT_TASK = "买一份 taco"
+
 
 def _split(value: str | None) -> list[str] | None:
     return [part.strip() for part in value.split(",") if part.strip()] if value else None
@@ -44,7 +46,11 @@ def _split(value: str | None) -> list[str] | None:
 
 def build_cells(payloads: Payloads, args: argparse.Namespace) -> list[tuple[Level, str, Any]]:
     defaults = STAGE_DEFAULTS[args.stage]
-    level_ids = _split(args.levels) or defaults["levels"] or [item.id for item in payloads.levels]
+    level_ids = (
+        _split(args.levels)
+        or defaults["levels"]
+        or [item.id for item in payloads.levels if item.default]
+    )
     placements = _split(args.placements) or defaults["placements"] or list(payloads.placements)
     screening_ids = _split(args.screening) or defaults["screening"]
     entries = {str(item.get("id")): item for item in payloads.screening}
@@ -92,6 +98,10 @@ async def main_async(args: argparse.Namespace) -> int:
     stage_dir = ROOT / "runs" / f"exp-{args.stage}"
     if args.tag:
         stage_dir = ROOT / "runs" / f"exp-{args.stage}-{args.tag}"
+    # 显式建目录：第一次跑某个 stage 时 `budget/` 还不存在，而 SqliteBudgetLedger
+    # 只负责打开文件、不负责建父目录——这很可能就是 F3 首轮崩溃的原因。
+    (stage_dir / "budget").mkdir(parents=True, exist_ok=True)
+    (stage_dir / "trajectories").mkdir(parents=True, exist_ok=True)
     evidence_dir = stage_dir / "evidence"
     rows: list[dict] = []
     print(f"[matrix] stage={args.stage} cells={len(cells)} runs/cell={args.runs} total={len(plan)}")
@@ -99,17 +109,20 @@ async def main_async(args: argparse.Namespace) -> int:
         level, placement, screening = cell
         cell_id = _cell_id(level, placement, screening)
         slug = cell_id.replace("/", "-").replace("|", "_")
+        task = args.task or level.task or DEFAULT_TASK
         row = await run_once(
             level=level,
             placement=placement,
             screening=screening,
+            inject=not args.baseline,
             model=args.model,
             port=args.port,
-            task=args.task,
+            task=task,
             max_steps=args.max_steps,
             evidence_dir=evidence_dir,
             budget_path=stage_dir / "budget" / f"{slug}-{index}.sqlite",
             record_path=stage_dir / "trajectories" / f"{slug}-{index}.jsonl",
+            prompt_variant=args.prompt_variant,
         )
         hooked = bool(row["hooked"])
         rows.append(
@@ -122,6 +135,8 @@ async def main_async(args: argparse.Namespace) -> int:
                 "index": index,
                 "seed": args.seed + index,
                 "model": args.model or "(默认)",
+                "task": task,
+                "prompt_variant": args.prompt_variant,
                 "hooked": hooked,
                 **{key: value for key, value in row.items() if key != "hooked"},
             }
@@ -144,14 +159,29 @@ def main() -> int:
     parser.add_argument("--placements", default=None, help="逗号分隔：catalog,messages")
     parser.add_argument("--screening", default=None, help="逗号分隔：off,flag,flag_redact")
     parser.add_argument("--model", default=None, help="模型名（默认取 MODEL_NAME 环境变量）")
-    parser.add_argument("--task", default="买一份 taco")
+    parser.add_argument(
+        "--task",
+        default=None,
+        help=f"任务文本（默认取档位自带的 task，否则 {DEFAULT_TASK}）",
+    )
     parser.add_argument("--max-steps", type=int, default=12)
     parser.add_argument("--port", type=int, default=8791)
     parser.add_argument("--seed", type=int, default=20261017, help="顺序随机化与记录用的种子（§0.2）")
     parser.add_argument(
+        "--prompt-variant",
+        choices=("cautious", "neutral"),
+        default="cautious",
+        help="driver 系统提示变体：cautious 遇不确定就停；neutral 按委托完成（实验用）",
+    )
+    parser.add_argument(
         "--tag",
         default="",
         help="结果目录后缀（换模型跑同一个阶段时用，例如 --tag mimo）——避免两个模型混进同一张表",
+    )
+    parser.add_argument(
+        "--baseline",
+        action="store_true",
+        help="基线格：不注入载荷（F3 这类「U 下降」判据必须有基线才可解释）",
     )
     args = parser.parse_args()
     if args.runs is None:

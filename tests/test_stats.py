@@ -12,6 +12,7 @@ import pytest
 from stats import (
     bootstrap_ci,
     clopper_pearson_upper,
+    fisher_exact_two_sided,
     mean,
     median,
     quantile,
@@ -85,4 +86,17 @@ def test_bad_inputs_are_rejected() -> None:
         clopper_pearson_upper(4, 3)
     with pytest.raises(ValueError):
         rule_of_three(0)
+
+
+@pytest.mark.parametrize(
+    ("table", "expected"),
+    [
+        ((5, 0, 0, 5), 2 / 252),       # 两组完全分离：双侧 = 2 / C(10,5)
+        ((5, 0, 1, 4), 12 / 252),      # 5/5 vs 1/5：双侧 p ≈ 0.0476
+        ((3, 2, 2, 3), 1.0),           # 完全对称：没有任何证据
+        ((4, 1, 1, 4), 52 / 252),      # 4/5 vs 1/5：双侧 p ≈ 0.2063
+    ],
+)
+def test_fisher_exact_against_known_tables(table: tuple[int, int, int, int], expected: float) -> None:
+    assert fisher_exact_two_sided(*table) == pytest.approx(expected, abs=1e-12)
 

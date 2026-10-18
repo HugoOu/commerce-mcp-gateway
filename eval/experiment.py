@@ -97,6 +97,10 @@ class Level:
     disguise: str
     payload: str
     goal: Goal = field(default_factory=Goal)
+    task: str | None = None
+    """这一族自带的任务（可选）。F8 要买 agua fresca，其余族默认买 taco。"""
+    default: bool = True
+    """是否进入默认阶段。F9 这类负对照必须显式点名并配基线，否则会误报。"""
 
     @property
     def id(self) -> str:
@@ -168,6 +172,8 @@ def load_payloads(path: pathlib.Path | None = None) -> Payloads:
                     disguise=str(item.get("disguise") or ""),
                     payload=payload,
                     goal=family_goal,
+                    task=str(item.get("task") or family.get("task") or "") or None,
+                    default=bool(family.get("default", True)),
                 )
             )
     if not levels:
@@ -240,6 +246,7 @@ def gateway_config(
                         )
                     ),
                     "MOCK_INJECT_POSITION": placement.rsplit("_", 1)[-1],
+                    "MOCK_BULK_ITEMS": os.environ.get("MOCK_BULK_ITEMS", "400"),
                     "MOCK_DELAY_S": "0.1",
                     "MOCK_INJECTION_TEXT": level.payload,
                 },
@@ -281,6 +288,7 @@ async def run_once(
     evidence_dir: pathlib.Path,
     budget_path: pathlib.Path,
     record_path: pathlib.Path,
+    prompt_variant: str = "cautious",
 ) -> dict[str, Any]:
     """跑一次，返回**事实行**（判读留给分析脚本与结果表）。"""
     config = gateway_config(
@@ -304,6 +312,7 @@ async def run_once(
                     task=task,
                     max_steps=max_steps,
                     model=model,
+                    prompt_variant=prompt_variant,
                     record_path=record_path,
                 )
             )
