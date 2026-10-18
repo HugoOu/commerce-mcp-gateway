@@ -103,7 +103,6 @@ async def main_async(args: argparse.Namespace) -> int:
             level=level,
             placement=placement,
             screening=screening,
-            expectations=payloads.expectations,
             model=args.model,
             port=args.port,
             task=args.task,
