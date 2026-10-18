@@ -53,6 +53,27 @@ def _loads(raw: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {"__raw_arguments": raw}
 
 
+def _extra_body() -> dict[str, Any]:
+    """额外请求体：`MODEL_EXTRA_BODY` 是 JSON 对象，原样并入 `chat.completions.create`。
+
+    用途之一是**关掉 reasoning**：不同 provider 的参数名不一样（OpenAI 系 `reasoning_effort`、
+    Anthropic 系 `thinking`、部分国产 provider `enable_thinking`），而 OpenCode Go 的文档没有写死
+    用哪一个——所以这里只做**透传**，具体写哪个键由调用方决定；猜错时服务端会回 400（可观测，不静默）。
+
+    例：`$env:MODEL_EXTRA_BODY = '{"reasoning_effort": "none"}'`。
+    """
+    raw = os.environ.get("MODEL_EXTRA_BODY")
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"MODEL_EXTRA_BODY 不是合法 JSON：{exc}") from None
+    if not isinstance(parsed, dict):
+        raise TypeError("MODEL_EXTRA_BODY 必须是 JSON 对象")
+    return parsed
+
+
 def _extra_headers(base_url: str | None) -> dict[str, str]:
     """额外请求头。
 
@@ -97,6 +118,10 @@ class OpenAIModel:
             messages=messages,
             tools=tools or None,
             tool_choice="auto" if tools else None,
+            # 走 `extra_body` 而不是 `**kwargs`：SDK 会校验关键字参数，
+            # `thinking` / `enable_thinking` 这类 provider 私有字段直接展开会 TypeError；
+            # 而 `extra_body` 是官方留的「原样并入 JSON body」的入口，什么键都能传。
+            extra_body=_extra_body() or None,
         )
         message = response.choices[0].message
         calls = [
