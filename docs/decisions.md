@@ -599,6 +599,30 @@
 - 实现时顺带修的一处不一致：`replay` 以前只看 `phase == "pending"` 的行——`resources/read` 被允许时只写一条 `done`（它随后必然报「不存在」），那条决策会被整个漏掉。现在 `replay` 与 `reconstruct` 共用 `_decision_rows`：每次调用取**第一条**记录，所有路径上都带着决策。
 - 简历角度（诚实写，不吹）：这条能写成「**两级证据 + 可验证绑定**：链上只留摘要（可对外出示），可复算输入单独落盘并受访问控制；重放时逐条校验摘要、用真策略重算决策，并报告『输入件撤下后链仍可验、但重构率归零』的落差」。它同时展示三件事：知道治理评测要的是**可重构**、知道支付数据**不该进可出示的审计件**、并且**把取舍量化**而不是声称两全。
 
+## ADR-0029 交易上下文与跨调用不变量（候选，含证据链与推荐，待你决策）
+
+- 背景：P0 状态攻击（2026-10-19）证明「每次调用单看都合法」不等于「整条交易合法」。当前 `policy/` 只做 per-call 的金额/商户/白名单检查，`budget/` 只做会话级累计；没有组件把 `catalog → checkout → intent → capture → order` 绑在一起。结果是：先 complete 后 capture 可以免单；capture 35 对 43.10 的购物车可以完成；同一 checkout 两个 intent 可以扣两次；两个 43.10 的 checkout 可以在 100 预算内完成两次购买。
+- 证据：
+  - 本仓库确定性探针 `eval/p0_state_attacks.py`（无需模型）：免单 43.10、少扣 8.10、同一 checkout 双扣 86.20、拆单两笔 86.20、先履约后扣款 43.10、**伪造 `pt_forged_<checkout>` 免单 43.10**；`over_capture` 被 PSP 拦住。原始表在 `docs/redteam-log.md` 的 P0 节与 `docs/evaluation.md` §6d。
+  - **token 不是能力**：`complete_checkout` 只检查 `startswith("pt_")` 与 `endswith(checkout_id)`；F12 里模型生成的双后缀 token 也被接受。任何人知道 checkout_id 就能拼出 token 完成订单。
+  - **AP2 open-mandate idempotency**：AP2 规范 §6 要求 shopping agent 在没有 rejection receipt 时不得重复提交 open mandate；但 2026-09 的 [One Consent, Two Success Receipts](https://zenodo.org/records/22262232) 指出签名只证明 mandate **有效**，不证明它**未被消费**；规范把唯一强制防双花放在 shopping agent 身上，verifier 只是 MAY 拒绝重叠 mandate。
+  - **AP2 manipulated checkout**：官方 Security Considerations 要求 closed mandate 用 `sd_hash` 绑定到 open mandate，并对金额/收款方做 constraint evaluation；这正是「跨调用字段绑定」的协议级先例。
+  - **AgentLAB / tool chaining**：长程攻击把「单独允许的工具调用序列」作为一类攻击面；与本项目的「拆单/多 intent/先履约后扣款」同构。
+  - **我们自己的 I2**：预算不变量是会话级 `committed + holds ≤ limit`；它证明「总额不超」，不证明「一次 consent 只扣一次」。
+- 推荐（方案 A：网关持有最小交易上下文）：在 `enforce/` 旁增加一个 `transaction/` 状态机（只服务固定工具，不做通用 DSL）：
+  1. `capture_payment`：按 `payment_intent_id → checkout_ref` 找到权威 checkout，要求 `currency`、`merchant_id`、**capture 金额 = checkout.total**；不接受「≤ 授权额」作为唯一条件。
+  2. `complete_checkout`：要求同一 checkout 已有 `succeeded` capture，且 capture 金额 = checkout.total；**payment token 必须是 PSP 签发、带签名/不可预测 nonce、可向 PSP 验证的凭证**，不能是拼出来的字符串。
+  3. 同一 `checkout_ref` 只允许一个有效/成功的 payment intent；重复 create 返回冲突，不新建。
+  4. mandate 新增 `max_transactions`（默认 1）；预算账本按 `(mandate_id, checkout_id)` 记录消费，拆单超过笔数直接拒。
+  5. 状态落 SQLite（与 budget 同库或同目录），证据里记录 `transaction_id` 与状态迁移；崩溃后可恢复。
+- 备选：a) 只在文档里承认缺口，不改代码；b) 把校验推给 PSP/merchant；c) 通用工作流 DSL；d) 只加 `complete` 前检查 capture（最小补丁）。
+- 为什么不选 a：P0 的免单/双扣是**真实的资金不变量**，不是展示问题；不修就不能说网关保证支付正确。
+- 为什么不选 b：上游今天拦、明天可能不拦；`over_capture` 被 PSP 拦住恰好说明网关不能把上游校验当成自己的校验。
+- 为什么不选 c：通用 DSL 会把项目拖进「工作流引擎」，超出 demo 范围；固定四个绑定足够覆盖 Agentic Commerce 的主路径。
+- 为什么不选 d：只补 `complete` 会留下少扣、双 intent、拆单三个缺口；交易上下文一次建好更干净。
+- 影响面：新增 `transaction/`、`enforce.py` 接线、`policy/schema.py` 的 `max_transactions`、`mandate` 解析、证据 schema（新增 `transaction_id` 字段）、测试（P0 六个场景转为回归）；不改变「单一执行点」与「构造/校验/透传」三分类。
+- 决策（**待你决策**）：建议采纳 A。采纳前不改产品代码，只保留探针与证据。
+
 ## 参考笔记（AI 记录，非决策本身）
 
 ### 2026-10-09 为什么协议错误不适合做策略拒绝
