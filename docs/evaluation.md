@@ -368,6 +368,8 @@
 
 **读法**：这不是“分数一定不好”，而是**当一条硬约束可以被其他维度补偿时，阈值必然要在误放和误拒之间取舍**。ADR-0001 的合取门选择的是“不补偿”：金额超限就是拒，不能用商户可信、预算充足、未过期来抵消。Step 4 的 11 点实验是这一原则的**示例**；更强的论据是硬门在分布漂移和未见组合下仍能提供保证，而不是这 11 个点上的经验分离。
 
+**行业调研（2026-10-19）**：Stripe Radar、Visa Agentic Ready、Mastercard Agent Pay Trust Framework、ACP/UCP delegated token、AP2 威胁分析、IntentLock 的共同模式都是“tokens/identity + hard controls + risk score + step-up/review”，没有一家把单一分数当唯一决策。详细笔记见 `docs/risk-decisioning.md`。
+
 **边界**：11 个场景是手标的、确定性对照，不是模型实验，也不是统计抽样；权重是手设的，敏感性分析显示 31.2% 的随机权重也能 0/0。它证明的是“补偿式决策会引入阈值取舍”，不是“分数规则在所有场景都更差”。
 
 
