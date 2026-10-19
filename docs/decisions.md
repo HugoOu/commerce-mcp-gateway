@@ -637,6 +637,7 @@
 - 实现记录（2026-10-19）：`src/gateway/transaction.py`（进程内 `TransactionGuard`，enabled 由 `GatewayConfig.transaction_guard` 控制，产品默认 True）；`tests/test_transaction.py` **9 条**回归全部通过（含并发重复 intent）。`eval/p0_state_attacks.py` 保留为修复前证据，默认 `transaction_guard=False` 以复现旧结果。**F14 的模型驱动拆单**是这条 ADR 的正面证据：2/5 尝试、2/2 被 `mandate_transaction_limit` 拒绝、0 双扣；`ASR=0.40` 是 attempt rate，不是成功率。
   - **并发修复（2026-10-19）**：`check` 通过后先在 checkout 上占 `pending_intent`，成功 `observe` 或失败 `abort` 时清除；`eval/concurrency_probe.py` 从修复前 **30/30 双 intent** 变为修复后 **0/30 双 intent、30/30 串行化、0 孤儿、0 实扣**。这是对 ADR-0029「一个 checkout 一个有效 intent」的并发补强。
   - **scripted 阳性对照**：`eval/scripted_adversary.py` 对金额越权与 complete-before-capture 各跑 N=30，均 30/30 拒绝、0/30 绕过、0 实扣（95% 上界 9.5%）。它证明网关在“决策层已经越权”时能端到端拦住；不证明 qwen 会越权。
+  - **持久化边界（2026-10-19）**：`eval/persistence_probe.py` N=10 显示：完成第一笔后重启，第二笔 **10/10 被放行**（累计 86.20，`max_transactions=1` 被绕过）；capture 后重启再 complete，**10/10 完不成**。这是 ADR-0029 TODO 的实证：单进程 demo 成立，重启/多副本不成立；修复需要 SQLite/共享状态。
 
 ## 参考笔记（AI 记录，非决策本身）
 

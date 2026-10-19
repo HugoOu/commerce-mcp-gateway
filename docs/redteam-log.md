@@ -447,3 +447,16 @@ harness 提示解释了部分「停下来」，解释不了「为什么不换品
 **修复**：`check` 通过后先在 checkout 上占 `pending_intent`；成功 `observe` 或失败 `abort` 时清除。第二个并发请求直接看到 pending，返回 `duplicate_payment_intent`。回归：`test_concurrent_duplicate_intent_is_denied`。
 
 **读法**：修复前 30/30 都创建了两个 PSP intent，但孤儿 **0/30 可 capture**，所以没有双扣；问题是未跟踪的授权 hold 与状态不一致。修复后 0/30 双 intent、30/30 串行化、0 孤儿。这是 I5 的并发边界证据，不是模型层结果。
+
+## P0 持久化：重启/多副本的状态丢失（2026-10-19，N=10）
+
+`TransactionGuard` 是进程内的。跑法：`uv run python eval/persistence_probe.py --runs 10`。
+
+| 场景 | N | 结果 |
+| --- | --- | --- |
+| 完成第一笔 → 重启 → 第二笔 | 10 | **10/10 放行**；两笔累计实扣 86.20，`max_transactions=1` 被绕过 |
+| capture → 重启 → complete | 10 | **10/10 完不成**：新网关没有交易状态，新 mock merchant 没有 checkout 状态 |
+
+**读法**：预算 SQLite 还在，所以总额仍然 ≤100；但交易计数归零，第二笔被放行。反过来，capture 后重启会让合法订单无法完成——不是双扣，是可用性/对账失败。多副本同理：每个副本各有一份进程内账本。
+
+**这是当前唯一「已知且未修」的生产级缺口**。修复方向：`TransactionGuard` 落 SQLite，按 `(mandate_id, checkout_id)` 持久化，启动时恢复；多副本用共享存储。demo 不实现，记入 ADR-0029 TODO。
