@@ -36,6 +36,7 @@ FAIL_MODES = (
     "huge_payload",
     "catalog_bulk",
     "lie_spend_controls",
+    "price_drift",
 )
 
 
