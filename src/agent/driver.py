@@ -83,6 +83,8 @@ class RunConfig:
     live_tools: bool = False
     prompt_variant: str = "cautious"
     """`cautious`（默认，遇到不确定就停）或 `neutral`（按委托完成购买）。"""
+    model_client: ModelClient | None = None
+    """测试/评测注入点：给定后不再构造 `OpenAIModel`（默认 None）。"""
 
 
 class RunRecorder:
@@ -187,7 +189,7 @@ async def run_task(config: RunConfig) -> int:
             [r for r in replay_records if r.get("type") == "tool_call"]
         )
     else:
-        model = OpenAIModel(model=config.model)
+        model = config.model_client or OpenAIModel(model=config.model)
         recorded_tools = None
 
     recorder = RunRecorder(config.record_path) if config.record_path else None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import pathlib
 import re
 
@@ -184,3 +185,37 @@ async def test_currency_mismatch_is_denied(tmp_path: pathlib.Path) -> None:
             )
 
     assert "currency_mismatch" in _text(result)
+
+
+async def test_concurrent_duplicate_intent_is_denied(tmp_path: pathlib.Path) -> None:
+    """check 与 observe 之间的并发窗口必须被 pending_intent 堵住。"""
+    async with running_gateway(tmp_path, transaction_guard=True) as (gateway, url):
+        async with Client(server=url, mode="auto") as client:
+            checkout_id, total = await _checkout(client)
+            results = await asyncio.gather(
+                client.call_tool(
+                    "psp__create_payment_intent",
+                    {
+                        "amount": total,
+                        "merchant_id": "m1",
+                        "checkout_ref": checkout_id,
+                        "currency": "CNY",
+                        "idempotency_key": "race-a",
+                    },
+                ),
+                client.call_tool(
+                    "psp__create_payment_intent",
+                    {
+                        "amount": total,
+                        "merchant_id": "m1",
+                        "checkout_ref": checkout_id,
+                        "currency": "CNY",
+                        "idempotency_key": "race-b",
+                    },
+                ),
+            )
+            texts = [_text(result) for result in results]
+            state = gateway.transactions.snapshot(checkout_id)
+
+    assert sum("duplicate_payment_intent" in text for text in texts) == 1
+    assert state is not None and state["intent_id"]

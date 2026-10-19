@@ -241,6 +241,7 @@ class Enforcer:
         try:
             upstream, real_name = self._registry.resolve(name)
         except UnknownTool:
+            self._transactions.abort(name, arguments)
             self._record(request, "pending", seq=seq, decision="error", outcome="unknown_tool",
                          policy_digest=self._policy.digest)
             raise MCPError(code=INVALID_PARAMS, message=f"Unknown tool: {name}", data=name) from None
@@ -253,6 +254,7 @@ class Enforcer:
         try:
             raw = await upstream.call_tool(real_name, arguments)
         except Exception:
+            self._transactions.abort(name, arguments)
             if hold is not None:
                 self._budget.release(hold.hold_id, reason="upstream_error", now=moment)
             self._record(request, "done", seq=seq, decision="allow", outcome="upstream_error",
@@ -263,6 +265,9 @@ class Enforcer:
         # ⑥ 净化（不改决策，只标记）
         sanitized, report = self._sanitizer.apply(raw)
         declined = _is_business_failure(sanitized)
+
+        if sanitized.is_error or declined:
+            self._transactions.abort(name, arguments)
 
         # ⑦ 结算：成功 commit，失败 / 被拒 release（ADR-0002）
         if hold is not None:

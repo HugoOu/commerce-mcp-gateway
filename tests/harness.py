@@ -56,6 +56,7 @@ def config(
     identity: IdentityConfig | None = None,
     merchant_env: dict[str, str] | None = None,
     transaction_guard: bool = False,
+    mandate_path: pathlib.Path | None = None,
 ) -> GatewayConfig:
     """演示策略 + 两个 mock 上游 + 所有产物落在 tmp_path（测试之间互不干扰）。
 
@@ -84,7 +85,7 @@ def config(
         budget_path=tmp_path / "budget.sqlite",
         approvals_path=tmp_path / "approvals.jsonl",
         policy_path=POLICY,
-        mandate_path=MANDATE,
+        mandate_path=mandate_path or MANDATE,
         approval_timeout_seconds=approval_timeout,
         identity=identity or IdentityConfig(),
         transaction_guard=transaction_guard,

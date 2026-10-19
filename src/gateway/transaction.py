@@ -44,6 +44,8 @@ class CheckoutState:
     status: str = "open"  # open | captured | completed | cancelled | refunded
     intent_id: str | None = None
     payment_token: str | None = None
+    pending_intent: bool = False
+    pending_capture: bool = False
     authorized_amount: float = 0.0
     captured_amount: float = 0.0
     refunded_amount: float = 0.0
@@ -89,7 +91,7 @@ class TransactionGuard:
             return "unknown_checkout_ref"
         if state.status != "open":
             return "checkout_not_open"
-        if state.intent_id is not None:
+        if state.intent_id is not None or state.pending_intent:
             return "duplicate_payment_intent"
         amount = _number(arguments.get("amount"))
         if amount is None or not _same_money(amount, state.total):
@@ -105,6 +107,8 @@ class TransactionGuard:
             started = self._started_by_mandate.get(mandate.mandate_id, 0)
             if started >= mandate.max_transactions:
                 return "mandate_transaction_limit"
+        # 在 check 内占位，堵住 check → 上游 → observe 之间的并发窗口。
+        state.pending_intent = True
         return None
 
     def _check_capture(self, arguments: dict[str, Any]) -> str | None:
@@ -112,13 +116,14 @@ class TransactionGuard:
         state = self._state_for_intent(str(intent_id)) if isinstance(intent_id, str) else None
         if state is None:
             return "unknown_payment_intent"
-        if state.status in ("captured", "completed", "refunded"):
+        if state.pending_capture or state.status in ("captured", "completed", "refunded"):
             return "payment_already_captured"
         if state.status != "open":
             return "checkout_not_open"
         amount = _number(arguments.get("amount"))
         if amount is None or not _same_money(amount, state.total):
             return "amount_mismatch"
+        state.pending_capture = True
         return None
 
     def _check_complete(self, arguments: dict[str, Any]) -> str | None:
@@ -214,6 +219,7 @@ class TransactionGuard:
         if state is None or state.intent_id is not None:
             return
         state.intent_id = intent_id
+        state.pending_intent = False
         state.payment_token = str(payload.get("payment_token") or "")
         state.authorized_amount = _number(payload.get("amount")) or 0.0
         state.history.append("intent_created")
@@ -230,6 +236,7 @@ class TransactionGuard:
         if captured is None:
             captured = _number(payload.get("amount")) or 0.0
         state.captured_amount = captured
+        state.pending_capture = False
         state.status = "captured"
         state.history.append("captured")
 
@@ -262,6 +269,22 @@ class TransactionGuard:
         state.history.append("refunded")
 
     # ------------------------------------------------------------------ 测试/观测
+
+    def abort(self, name: str, arguments: dict[str, Any]) -> None:
+        """上游失败/业务拒绝时释放 check 占位，允许模型修完后重试。"""
+        if not self.enabled:
+            return
+        with self._lock:
+            if name == "psp__create_payment_intent":
+                checkout_id = arguments.get("checkout_ref")
+                state = self._checkouts.get(str(checkout_id)) if isinstance(checkout_id, str) else None
+                if state is not None:
+                    state.pending_intent = False
+            elif name == "psp__capture_payment":
+                intent_id = arguments.get("payment_intent_id")
+                state = self._state_for_intent(str(intent_id)) if isinstance(intent_id, str) else None
+                if state is not None:
+                    state.pending_capture = False
 
     def snapshot(self, checkout_id: str) -> dict[str, Any] | None:
         with self._lock:
