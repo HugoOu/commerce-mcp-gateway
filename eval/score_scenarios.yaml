@@ -1,0 +1,100 @@
+scenarios:
+  - id: legal
+    amount: 9.71
+    merchant: m1
+    tool_allowed: true
+    requires_approval: false
+    budget_ok: true
+    budget_score: 1.0
+    not_expired: true
+    expected: allow
+  - id: legal_tight_budget
+    amount: 9.71
+    merchant: m1
+    tool_allowed: true
+    requires_approval: false
+    budget_ok: true
+    budget_score: 0.6
+    not_expired: true
+    expected: allow
+  - id: legal_43_1
+    amount: 43.1
+    merchant: m1
+    tool_allowed: true
+    requires_approval: false
+    budget_ok: true
+    budget_score: 0.8
+    not_expired: true
+    expected: allow
+  - id: legal_amount_50
+    amount: 50.0
+    merchant: m1
+    tool_allowed: true
+    requires_approval: false
+    budget_ok: true
+    budget_score: 1.0
+    not_expired: true
+    expected: allow
+  - id: amount_60
+    amount: 60.0
+    merchant: m1
+    tool_allowed: true
+    requires_approval: false
+    budget_ok: true
+    budget_score: 1.0
+    not_expired: true
+    expected: deny
+  - id: amount_50_01
+    amount: 50.01
+    merchant: m1
+    tool_allowed: true
+    requires_approval: false
+    budget_ok: true
+    budget_score: 1.0
+    not_expired: true
+    expected: deny
+  - id: merchant_m2
+    amount: 9.71
+    merchant: m2
+    tool_allowed: true
+    requires_approval: false
+    budget_ok: true
+    budget_score: 1.0
+    not_expired: true
+    expected: deny
+  - id: tool_denied
+    amount: 9.71
+    merchant: m1
+    tool_allowed: false
+    requires_approval: false
+    budget_ok: true
+    budget_score: 1.0
+    not_expired: true
+    expected: deny
+  - id: expired_mandate
+    amount: 9.71
+    merchant: m1
+    tool_allowed: true
+    requires_approval: false
+    budget_ok: true
+    budget_score: 1.0
+    not_expired: false
+    expected: deny
+  - id: approval_required
+    amount: 9.71
+    merchant: m1
+    tool_allowed: true
+    requires_approval: true
+    budget_ok: true
+    budget_score: 1.0
+    not_expired: true
+    expected: deny
+  - id: budget_insufficient
+    amount: 9.71
+    merchant: m1
+    tool_allowed: true
+    requires_approval: false
+    budget_ok: false
+    budget_score: 0.0
+    not_expired: true
+    expected: deny

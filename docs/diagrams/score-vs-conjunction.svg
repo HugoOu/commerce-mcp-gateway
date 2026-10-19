@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="380" viewBox="0 0 760 380">
+<rect width="100%" height="100%" fill="white" />
+<text x="64" y="24" font-size="16" font-weight="600" fill="#111827">Conjunction gate vs weighted score</text>
+<line x1="64" y1="324.0" x2="736" y2="324.0" stroke="#e5e7eb" />
+<text x="56" y="328.0" text-anchor="end" font-size="11" fill="#6b7280">0</text>
+<line x1="64" y1="284.0" x2="736" y2="284.0" stroke="#e5e7eb" />
+<text x="56" y="288.0" text-anchor="end" font-size="11" fill="#6b7280">1</text>
+<line x1="64" y1="244.0" x2="736" y2="244.0" stroke="#e5e7eb" />
+<text x="56" y="248.0" text-anchor="end" font-size="11" fill="#6b7280">2</text>
+<line x1="64" y1="204.0" x2="736" y2="204.0" stroke="#e5e7eb" />
+<text x="56" y="208.0" text-anchor="end" font-size="11" fill="#6b7280">3</text>
+<line x1="64" y1="164.0" x2="736" y2="164.0" stroke="#e5e7eb" />
+<text x="56" y="168.0" text-anchor="end" font-size="11" fill="#6b7280">4</text>
+<line x1="64" y1="124.0" x2="736" y2="124.0" stroke="#e5e7eb" />
+<text x="56" y="128.0" text-anchor="end" font-size="11" fill="#6b7280">5</text>
+<line x1="64" y1="84.0" x2="736" y2="84.0" stroke="#e5e7eb" />
+<text x="56" y="88.0" text-anchor="end" font-size="11" fill="#6b7280">6</text>
+<line x1="64" y1="44.0" x2="736" y2="44.0" stroke="#e5e7eb" />
+<text x="56" y="48.0" text-anchor="end" font-size="11" fill="#6b7280">7</text>
+<line x1="64.0" y1="44" x2="64.0" y2="324" stroke="#f3f4f6" />
+<text x="64.0" y="344" text-anchor="middle" font-size="11" fill="#6b7280">0.5</text>
+<line x1="198.4" y1="44" x2="198.4" y2="324" stroke="#f3f4f6" />
+<text x="198.4" y="344" text-anchor="middle" font-size="11" fill="#6b7280">0.6</text>
+<line x1="332.8" y1="44" x2="332.8" y2="324" stroke="#f3f4f6" />
+<text x="332.8" y="344" text-anchor="middle" font-size="11" fill="#6b7280">0.7</text>
+<line x1="467.2" y1="44" x2="467.2" y2="324" stroke="#f3f4f6" />
+<text x="467.2" y="344" text-anchor="middle" font-size="11" fill="#6b7280">0.8</text>
+<line x1="601.6" y1="44" x2="601.6" y2="324" stroke="#f3f4f6" />
+<text x="601.6" y="344" text-anchor="middle" font-size="11" fill="#6b7280">0.9</text>
+<line x1="736.0" y1="44" x2="736.0" y2="324" stroke="#f3f4f6" />
+<text x="736.0" y="344" text-anchor="middle" font-size="11" fill="#6b7280">1.0</text>
+<polyline fill="none" stroke="#dc2626" stroke-width="2" points="64.0,44.0 77.4,44.0 90.9,44.0 104.3,44.0 117.8,44.0 131.2,44.0 144.6,44.0 158.1,44.0 171.5,44.0 185.0,44.0 198.4,44.0 211.8,44.0 225.3,44.0 238.7,44.0 252.2,44.0 265.6,44.0 279.0,44.0 292.5,44.0 305.9,44.0 319.4,44.0 332.8,44.0 346.2,44.0 359.7,44.0 373.1,44.0 386.6,44.0 400.0,44.0 413.4,124.0 426.9,124.0 440.3,124.0 453.8,124.0 467.2,124.0 480.6,244.0 494.1,244.0 507.5,244.0 521.0,244.0 534.4,244.0 547.8,244.0 561.3,244.0 574.7,244.0 588.2,244.0 601.6,244.0 615.0,324.0 628.5,324.0 641.9,324.0 655.4,324.0 668.8,324.0 682.2,324.0 695.7,324.0 709.1,324.0 722.6,324.0 736.0,324.0" />
+<polyline fill="none" stroke="#2563eb" stroke-width="2" points="64.0,324.0 77.4,324.0 90.9,324.0 104.3,324.0 117.8,324.0 131.2,324.0 144.6,324.0 158.1,324.0 171.5,324.0 185.0,324.0 198.4,324.0 211.8,324.0 225.3,324.0 238.7,324.0 252.2,324.0 265.6,324.0 279.0,324.0 292.5,324.0 305.9,324.0 319.4,324.0 332.8,324.0 346.2,324.0 359.7,324.0 373.1,324.0 386.6,324.0 400.0,324.0 413.4,324.0 426.9,324.0 440.3,324.0 453.8,324.0 467.2,324.0 480.6,324.0 494.1,324.0 507.5,324.0 521.0,324.0 534.4,324.0 547.8,324.0 561.3,324.0 574.7,324.0 588.2,324.0 601.6,324.0 615.0,284.0 628.5,284.0 641.9,284.0 655.4,284.0 668.8,284.0 682.2,244.0 695.7,244.0 709.1,244.0 722.6,244.0 736.0,244.0" />
+<text x="64" y="368" font-size="11" fill="#6b7280">threshold</text>
+<text x="736" y="56" text-anchor="end" font-size="12" fill="#dc2626">false accept</text>
+<text x="736" y="72" text-anchor="end" font-size="12" fill="#2563eb">false deny</text>
+</svg>
