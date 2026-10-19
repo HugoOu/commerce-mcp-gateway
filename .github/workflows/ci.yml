@@ -10,5 +10,5 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run ruff check
+      - run: uv run ruff check --no-cache --output-format=github
       - run: uv run pytest -q
