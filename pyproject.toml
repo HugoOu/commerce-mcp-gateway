@@ -2,6 +2,9 @@
 name = "commerce-mcp-gateway"
 version = "0.1.0"
 description = "Policy-enforcing MCP gateway for agentic commerce and payments"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Yuhao Ou"}]
 requires-python = ">=3.12"
 dependencies = [
     "mcp>=1.0.0",

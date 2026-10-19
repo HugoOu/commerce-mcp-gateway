@@ -43,7 +43,7 @@ from gateway import cli
 from gateway.app import Gateway
 
 
-def show(label: str, result: Any, *, limit: int = 1500) -> None:
+def show(label: str, result: Any, *, limit: int = 1500) -> Any:
     dump = result.model_dump(by_alias=True)
     texts = [block.get("text", "") for block in dump.get("content", []) if isinstance(block, dict)]
     print(f"{label}: isError={dump.get('isError')} resultType={dump.get('resultType')}")
@@ -52,6 +52,7 @@ def show(label: str, result: Any, *, limit: int = 1500) -> None:
         if len(body) > limit:
             body = f"{body[:limit]}\n  …（已截断，原文 {len(text)} 字符）"
         print("  " + body)
+    return result
 
 
 def parse_arguments(parts: list[str]) -> dict[str, Any]:
@@ -177,15 +178,30 @@ async def cmd_scenario(args: argparse.Namespace) -> None:
                 print(f"== 网关 {gateway.url}（run_id={config.run_id}）==")
                 tools = [tool.name for tool in (await client.list_tools()).tools]
                 print(f"\n1) 工具清单（{len(tools)} 个，ADR-0010 过滤后）：{tools}")
-                show("\n2) 正路：建购物车",
-                     await client.call_tool("merchant__create_checkout", {"sku": "taco", "quantity": 1}))
-                show("\n3) 正路：授权 9.71", await client.call_tool(
+                checkout_result = await client.call_tool(
+                    "merchant__create_checkout", {"sku": "taco", "quantity": 1}
+                )
+                show("\n2) 正路：建购物车", checkout_result)
+                checkout = json.loads(checkout_result.content[0].text)
+                checkout_id = checkout["checkout_id"]
+                total = checkout["totals"]["total"]
+                show(f"\n3) 正路：授权 {total}", await client.call_tool(
                     "psp__create_payment_intent",
-                    {"amount": 9.71, "merchant_id": "m1", "checkout_ref": "ck_play", "idempotency_key": "k1"},
+                    {
+                        "amount": total,
+                        "merchant_id": "m1",
+                        "checkout_ref": checkout_id,
+                        "idempotency_key": "k1",
+                    },
                 ))
                 show("\n4) 通道②：超上限 999", await client.call_tool(
                     "psp__create_payment_intent",
-                    {"amount": 999.0, "merchant_id": "m1", "checkout_ref": "ck_play", "idempotency_key": "k2"},
+                    {
+                        "amount": 999.0,
+                        "merchant_id": "m1",
+                        "checkout_ref": checkout_id,
+                        "idempotency_key": "k2",
+                    },
                 ))
                 show("\n5) 通道①：白名单外的工具", await client.call_tool(
                     "psp__refund_payment", {"payment_intent_id": "pi_x"}

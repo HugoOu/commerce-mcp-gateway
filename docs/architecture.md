@@ -1,5 +1,8 @@
 # 架构（先验架构全文）
 
+[中文](architecture.md) · [English](architecture.en.md)
+
+
 > 本文件由 AI 从既有的架构讨论转写（2026-10-05），**内容与讨论结论一致，未改动架构本身**。
 > 架构变更流程见 `AGENTS.md`：需充分证据、User 明确认可，并记入 `docs/decisions.md`。
 
@@ -120,4 +123,4 @@ flowchart TB
 
 - 三个设计决定（策略语言边界、预算语义、证据语义）的取舍与备选写在 `docs/decisions.md`。
 - 威胁与挂点的对应写在 `docs/threat-model.md`。
-- 分阶段计划写在 `docs/w1-plan.md`。
+- 分阶段计划保留在开发记录中（未随公开仓库发布）。

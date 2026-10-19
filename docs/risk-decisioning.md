@@ -1,5 +1,8 @@
 # 风控门：硬门 + ML 残差风险（2026-10-19）
 
+[中文](risk-decisioning.md) · [English](risk-decisioning.en.md)
+
+
 > 这是 Step 4 之后的决策原则与行业调研记录。**当前 demo 不实现 ML**；它作为未来 TODO，避免把项目拖成风控平台。
 
 ## 1. 原则
