@@ -599,7 +599,7 @@
 - 实现时顺带修的一处不一致：`replay` 以前只看 `phase == "pending"` 的行——`resources/read` 被允许时只写一条 `done`（它随后必然报「不存在」），那条决策会被整个漏掉。现在 `replay` 与 `reconstruct` 共用 `_decision_rows`：每次调用取**第一条**记录，所有路径上都带着决策。
 - 简历角度（诚实写，不吹）：这条能写成「**两级证据 + 可验证绑定**：链上只留摘要（可对外出示），可复算输入单独落盘并受访问控制；重放时逐条校验摘要、用真策略重算决策，并报告『输入件撤下后链仍可验、但重构率归零』的落差」。它同时展示三件事：知道治理评测要的是**可重构**、知道支付数据**不该进可出示的审计件**、并且**把取舍量化**而不是声称两全。
 
-## ADR-0029 交易上下文与跨调用不变量（候选，含证据链与推荐，待你决策）
+## ADR-0029 交易上下文与跨调用不变量（已采纳，2026-10-19；demo 版最小实现）
 
 - 背景：P0 状态攻击（2026-10-19）证明「每次调用单看都合法」不等于「整条交易合法」。当前 `policy/` 只做 per-call 的金额/商户/白名单检查，`budget/` 只做会话级累计；没有组件把 `catalog → checkout → intent → capture → order` 绑在一起。结果是：先 complete 后 capture 可以免单；capture 35 对 43.10 的购物车可以完成；同一 checkout 两个 intent 可以扣两次；两个 43.10 的 checkout 可以在 100 预算内完成两次购买。
 - **性质**：主因是**架构范围没有定义 I5（交易级不变量）**，不是 I1–I4 的实现回归——I1（无旁路）、I2（预算不超）、I3（链可验）、I4（可重构）在 P0 场景里都仍然成立。两个实现捷径把缺口放大成可利用漏洞：① mock merchant 的 token 只做 `startswith` / `endswith` 字符串检查；② `complete_checkout` 没有要求「先 capture」。所以它是「架构漏了一层 + 实现用了足够被利用的简化」，不是「实现违背了已承诺的交易不变量」——那条不变量此前不存在。
@@ -630,7 +630,11 @@
 - 为什么不选 d：只补 `complete` 会留下少扣、双 intent、拆单三个缺口；交易上下文一次建好更干净。
 - 影响面：新增 `transaction/`、`enforce.py` 接线、`policy/schema.py` 的 `max_transactions`、`mandate` 解析、证据 schema（新增 `transaction_id` 字段）、测试（P0 六个场景转为回归）；不改变「单一执行点」与「构造/校验/透传」三分类。
 - 证据检查结论：**整体支持交易上下文与 token 验证；部分修正了 capture 的不变量**。行业证据支持「一个 checkout 一个 intent」「token 必须是单次可验证凭证」「完成前必须对账」；但 Stripe multicapture 说明「每次 capture = 总额」过严，应改为「完成时累计 capture = 总额，或显式部分履约」。这条修正让方案更接近真实支付语义，而不是把 demo 的简化当成行业规则。
-- 决策（**待你决策**）：建议采纳 A。采纳前不改产品代码，只保留探针与证据。
+- 决策（**已定，2026-10-19 你采纳方案 A**）：按 demo 版最小闭环落地：
+  - **本次实现**：内存 `transaction/` 账本；一个 checkout 一个有效 intent；intent 金额 = 购物车总额；capture 金额 = 购物车总额；`complete_checkout` 前必须有成功 capture，且 token 精确匹配 PSP 签发值；mandate `max_transactions` 默认 1；`cancel` 已 capture 则拒；P0 六个场景转为回归测试。
+  - **TODO（留给未来，不在 demo 内）**：SQLite 持久化与崩溃恢复；部分捕获 / multicapture（按 Stripe 语义累计）；退款累计与部分退款；证据 schema 的 `transaction_id`；并发 TOCTOU；多 mandate / 多币种的完整状态机；上游 PSP 的签名 token 验证。
+  - **为什么这样切**：demo 的目标是证明「per-call 之外还需要 transaction-level 不变量」，不是复刻 Stripe 的全部支付语义。复杂部分记 TODO，避免把项目拖成支付引擎。
+- 实现记录（2026-10-19）：`src/gateway/transaction.py`（进程内 `TransactionGuard`，enabled 由 `GatewayConfig.transaction_guard` 控制，产品默认 True）；`tests/test_transaction.py` 8 条回归全部通过。`eval/p0_state_attacks.py` 保留为修复前证据，默认 `transaction_guard=False` 以复现旧结果。
 
 ## 参考笔记（AI 记录，非决策本身）
 

@@ -221,18 +221,20 @@
 
 **边界**：`over_capture` 被 PSP 拦住，说明上游有防线；但网关不能把上游的校验当成自己的校验——上游今天拦、明天可能不拦，网关的可复算声称必须建立在自己的证据上。
 
+**修复状态（2026-10-19）**：ADR-0029 已采纳并落地 demo 版交易上下文（`src/gateway/transaction.py`，`GatewayConfig.transaction_guard=True` 默认开启）。上表是**修复前**的确定性证据；修复后的回归在 `tests/test_transaction.py`（8 条：正常购买通过、先 complete 被拒、伪造 token 被拒、少扣被拒、重复 intent 被拒、拆单被拒、重复 capture 被拒、币种不符被拒）。`eval/p0_state_attacks.py` 保留为历史探针，默认关闭 guard 以复现旧结果。
+
 ## 6e. 网关声称与证据矩阵（2026-10-19）
 
 > 这一节回答一个容易被混在一起的问题：**「网关有没有得到 Evaluation 的支持」要拆成 claim 看。**
 
 | 声称 | 现有证据 | 状态 |
 | --- | --- | --- |
-| 每次调用都经过 Decision（I1） | T1–T9、三条越权通道、import-linter、125 条测试 | **支持** |
+| 每次调用都经过 Decision（I1） | T1–T9、三条越权通道、import-linter、133 条测试 | **支持** |
 | 预算不超支（I2） | 50 并发、0 超支、hold 回收 | **支持** |
 | 审批绑定到动作 | form / CLI / 老客户端 fail-closed、`action_hash` | **支持** |
 | 证据可验、决策可重构（I3/I4） | 4/4 篡改检出、6/6 重构 | **支持** |
 | 模型驱动的端到端拒绝（模型尝试越权、网关拦下） | 有确定性脚本攻击；**没有**模型真正发起越权的阳性样本 | **缺失** |
-| 交易级一致性（I5） | P0 六个反例：免单、少扣、双扣、拆单、先履约后扣款、伪造 token | **不支持（当前为假）** |
+| 交易级一致性（I5） | P0 六个反例是修复前；ADR-0029 demo 版已落地，`tests/test_transaction.py` 8 条覆盖免单/少扣/双扣/拆单/伪造 token/先履约后扣款 | **demo 版支持**；SQLite 持久化、部分捕获/multicapture、退款累计仍是 TODO |
 | 决策/信念不被操纵 | P2：baseline 0/30 vs injected 30/30 | **不是网关的声称**；这是模型层证据 |
 
 **结论**：网关得到了 **per-call 控制面**的 Evaluation 支持；没有得到 **transaction-level correctness** 的支持，而且 P0 给出了反证；信念层证据既不能支持也不能证伪网关，它说明的是模型会把商户声明当事实。把这三层混成一句「网关有没有用」会同时高估和低估它。
