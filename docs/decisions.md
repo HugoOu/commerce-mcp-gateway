@@ -634,7 +634,9 @@
   - **本次实现**：内存 `transaction/` 账本；一个 checkout 一个有效 intent；intent 金额 = 购物车总额；capture 金额 = 购物车总额；`complete_checkout` 前必须有成功 capture，且 token 精确匹配 PSP 签发值；mandate `max_transactions` 默认 1；`cancel` 已 capture 则拒；P0 六个场景转为回归测试。
   - **TODO（留给未来，不在 demo 内）**：SQLite 持久化与崩溃恢复；部分捕获 / multicapture（按 Stripe 语义累计）；退款累计与部分退款；证据 schema 的 `transaction_id`；并发 TOCTOU；多 mandate / 多币种的完整状态机；上游 PSP 的签名 token 验证。
   - **为什么这样切**：demo 的目标是证明「per-call 之外还需要 transaction-level 不变量」，不是复刻 Stripe 的全部支付语义。复杂部分记 TODO，避免把项目拖成支付引擎。
-- 实现记录（2026-10-19）：`src/gateway/transaction.py`（进程内 `TransactionGuard`，enabled 由 `GatewayConfig.transaction_guard` 控制，产品默认 True）；`tests/test_transaction.py` 8 条回归全部通过。`eval/p0_state_attacks.py` 保留为修复前证据，默认 `transaction_guard=False` 以复现旧结果。**F14 的模型驱动拆单**是这条 ADR 的正面证据：2/5 尝试、2/2 被 `mandate_transaction_limit` 拒绝、0 双扣；`ASR=0.40` 是 attempt rate，不是成功率。
+- 实现记录（2026-10-19）：`src/gateway/transaction.py`（进程内 `TransactionGuard`，enabled 由 `GatewayConfig.transaction_guard` 控制，产品默认 True）；`tests/test_transaction.py` **9 条**回归全部通过（含并发重复 intent）。`eval/p0_state_attacks.py` 保留为修复前证据，默认 `transaction_guard=False` 以复现旧结果。**F14 的模型驱动拆单**是这条 ADR 的正面证据：2/5 尝试、2/2 被 `mandate_transaction_limit` 拒绝、0 双扣；`ASR=0.40` 是 attempt rate，不是成功率。
+  - **并发修复（2026-10-19）**：`check` 通过后先在 checkout 上占 `pending_intent`，成功 `observe` 或失败 `abort` 时清除；`eval/concurrency_probe.py` 从修复前 **30/30 双 intent** 变为修复后 **0/30 双 intent、30/30 串行化、0 孤儿、0 实扣**。这是对 ADR-0029「一个 checkout 一个有效 intent」的并发补强。
+  - **scripted 阳性对照**：`eval/scripted_adversary.py` 对金额越权与 complete-before-capture 各跑 N=30，均 30/30 拒绝、0/30 绕过、0 实扣（95% 上界 9.5%）。它证明网关在“决策层已经越权”时能端到端拦住；不证明 qwen 会越权。
 
 ## 参考笔记（AI 记录，非决策本身）
 
