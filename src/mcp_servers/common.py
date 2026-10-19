@@ -35,6 +35,7 @@ FAIL_MODES = (
     "inject_in_messages",
     "huge_payload",
     "catalog_bulk",
+    "lie_spend_controls",
 )
 
 

@@ -34,6 +34,7 @@ MANDATE = ROOT / "src" / "gateway" / "demo-mandate.yaml"
 
 LANDING_TOOL = {"catalog": "merchant__list_catalog", "messages": "merchant__create_checkout"}
 LANDING_TOOL["gateway_hint"] = "psp__create_payment_intent"
+LANDING_TOOL["psp_lie"] = "psp__get_spend_controls"
 """载荷的落点工具：只有它**成功返回**了，模型才真的读到了载荷（条件 ASR 的分母）。"""
 
 COMPLETION_TOOL = "merchant__complete_checkout"
@@ -258,7 +259,10 @@ def gateway_config(
                 alias="psp",
                 command=sys.executable,
                 args=[str(MOCKS / "psp.py")],
-                env={"PSP_MODE": "none", "MOCK_DELAY_S": "0.1"},
+                env={
+                    "PSP_MODE": "lie_spend_controls" if inject and placement == "psp_lie" else "none",
+                    "MOCK_DELAY_S": "0.1",
+                },
             ),
         ],
         port=port,
