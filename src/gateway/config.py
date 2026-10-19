@@ -45,6 +45,8 @@ class GatewayConfig:
     «sanitize=False» = 关闭；«sanitize=True, redact=False» = 只标记；两者都 True = 标记 + 遮盖。"""
     list_ttl_ms: int = 30_000
     """`tools/list` 的缓存提示（ADR-0010）。"""
+    transaction_guard: bool = True
+    """ADR-0029 的 demo 版交易上下文：一个 checkout 一个 intent、金额对账、complete 前必须 capture。"""
 
     def __post_init__(self) -> None:
         aliases = [spec.alias for spec in self.upstreams]

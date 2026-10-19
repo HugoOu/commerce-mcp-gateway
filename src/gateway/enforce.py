@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import os
 import time
 from typing import Any, NoReturn
@@ -34,6 +35,7 @@ from .hashing import digest
 from .identity import IdentityResolver
 from .policy import PolicyEngine
 from .sanitize import Sanitizer
+from .transaction import TransactionGuard
 from .upstream import UnknownTool, UpstreamRegistry
 
 GENERIC_DENIAL = "policy_denied"
@@ -75,6 +77,7 @@ class Enforcer:
         budget: BudgetLedger,
         identity: IdentityResolver,
         sanitizer: Sanitizer,
+        transactions: TransactionGuard,
         approval: DurableApprovalGate,
         run_id: str,
         list_ttl_ms: int = 30_000,
@@ -86,6 +89,7 @@ class Enforcer:
         self._budget = budget
         self._identity = identity
         self._sanitizer = sanitizer
+        self._transactions = transactions
         self._approval = approval
         self._run_id = run_id
         self._list_ttl_ms = list_ttl_ms
@@ -217,6 +221,15 @@ class Enforcer:
         if decision.kind != "allow":
             return self._deny(request, decision, seq=seq)
 
+        # ①.5 交易上下文（ADR-0029）：per-call 都合法，不代表整条交易合法。
+        blocked = self._transactions.check(name, arguments, basis)
+        if blocked is not None:
+            return self._deny(
+                request,
+                Decision(kind="deny", reason_code=blocked, hard=False),
+                seq=seq,
+            )
+
         # ② 预算：有金额的调用先占额度（ADR-0002 的 reserve）
         try:
             hold = self._reserve(request, basis)
@@ -257,6 +270,12 @@ class Enforcer:
                 self._budget.release(hold.hold_id, reason="declined" if declined else "tool_error", now=moment)
             else:
                 self._budget.commit(hold.hold_id, now=moment)
+
+        # ⑦.5 交易状态只在成功结果上推进（ADR-0029）。
+        if not sanitized.is_error and not declined:
+            payload = _json_payload(sanitized)
+            if payload is not None:
+                self._transactions.observe(name, payload, basis)
 
         # ⑧ 收尾记账
         outcome = "declined" if declined else ("tool_error" if sanitized.is_error else "ok")
@@ -500,6 +519,21 @@ class Enforcer:
             return self._registry.resolve(name)[0].alias
         except UnknownTool:
             return None
+
+
+def _json_payload(result: types.CallToolResult) -> dict[str, Any] | None:
+    """工具结果的文本 JSON（mock 世界统一返回 JSON 文本）；解析失败返回 None。"""
+    for block in result.content:
+        text = getattr(block, "text", None)
+        if not isinstance(text, str):
+            continue
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 def _is_business_failure(result: types.CallToolResult) -> bool:

@@ -24,6 +24,8 @@ class Mandate:
     currency: str = "CNY"
     budget_total: float | None = None
     per_txn_max: float | None = None
+    max_transactions: int | None = 1
+    """一次 mandate 最多允许几次交易（ADR-0029）。demo 默认 1；None = 不限制。"""
     allowed_merchants: tuple[str, ...] = ()
     allowed_categories: tuple[str, ...] = ()
     expires_at: str | None = None

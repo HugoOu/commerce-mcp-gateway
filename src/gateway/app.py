@@ -21,6 +21,7 @@ from .frontdoor import build_server
 from .identity import IdentityResolver, load_mandate
 from .policy import AllowAllPolicy, load_policy
 from .sanitize import Sanitizer
+from .transaction import TransactionGuard
 from .upstream import UpstreamRegistry
 
 
@@ -37,6 +38,7 @@ class Gateway:
             mandate=load_mandate(config.mandate_path) if config.mandate_path else None,
         )
         self.sanitizer = Sanitizer(enabled=config.sanitize, redact=config.sanitize_redact)
+        self.transactions = TransactionGuard(enabled=config.transaction_guard)
         self.approval = DurableApprovalGate(config.approvals_path, timeout_seconds=config.approval_timeout_seconds)
         self.registry = UpstreamRegistry(config.upstreams)
         self.enforcer = Enforcer(
@@ -46,6 +48,7 @@ class Gateway:
             budget=self.budget,
             identity=self.identity,
             sanitizer=self.sanitizer,
+            transactions=self.transactions,
             approval=self.approval,
             run_id=config.run_id,
             list_ttl_ms=config.list_ttl_ms,

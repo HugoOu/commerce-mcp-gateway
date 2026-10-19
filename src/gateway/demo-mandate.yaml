@@ -5,6 +5,7 @@ kind: open
 currency: CNY
 budget_total: 100.0
 per_txn_max: 50.0
+max_transactions: 1
 allowed_merchants:
   - m1
 allowed_categories:
