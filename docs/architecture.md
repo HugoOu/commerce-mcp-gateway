@@ -89,7 +89,7 @@ flowchart TB
 
 > `resources/read`、`resources/list`、`resources/subscribe` 走同一条链；差异在步骤 6 与 7——`resources/list` 需要按 URI 过滤并**重签游标**（ADR-0013），订阅通知需要在流上做同等检查。
 
-## 6. 四条可测试不变量（简历上的数字来源）
+## 6. 四条可测试不变量 + 一条候选（简历上的数字来源）
 
 | 编号 | 不变量 | 测法 |
 | --- | --- | --- |
@@ -97,6 +97,11 @@ flowchart TB
 | I2 | 并发安全：`sum(committed) + sum(active holds) ≤ limit` | N=50 并发压测 |
 | I3 | 防篡改：篡改任一记录 verify 失败 | 翻转一个字节必须被检出 |
 | I4 | 可复算：同一证据包重放决策序列逐条一致 | 重放确定性率 |
+| **I5（候选，2026-10-19）** | **交易一致性**：同一 consent / checkout 的资金与履约会话满足「完成时累计捕获 = 购物车总额（或显式部分履约）」「complete 前必须有成功 capture」「一个 checkout 一个有效 intent」「mandate 的交易笔数上限」 | 当前**未实现**；`eval/p0_state_attacks.py` 已给出六个反例（免单、少扣、双扣、拆单、先履约后扣款、伪造 token） |
+
+**I5 与 I1–I4 的关系**：I1–I4 是 **per-call / 会话级**不变量；I5 是 **跨调用、交易级**不变量。P0 的缺口不是 I1–I4 的回归——I1（无旁路）、I2（预算不超）、I3（链可验）、I4（可重构）在 P0 场景里都仍然成立。缺的是「这一次同意到底该产生几次扣款、金额该和哪个权威总额对齐」。
+
+**这是架构缺口还是实现失误？** 主因是**架构范围没有定义交易级不变量**：原设计把网关定位为 per-call 授权 + 会话预算 + 审计，没有承诺 `checkout → intent → capture → order` 的状态机。两个实现捷径把缺口放大成可利用漏洞：① mock merchant 的 token 只做 `startswith` / `endswith` 字符串检查；② `complete_checkout` 的 policy 规则没有要求「先 capture」。所以正确的说法是：**架构漏了 I5，实现在 token 与 complete 两处用了足以被利用的简化**；不是「实现违背了某条已承诺的交易不变量」——那条不变量此前根本不存在。
 
 ## 7. 类型三分类：构造 / 校验 / 透传
 

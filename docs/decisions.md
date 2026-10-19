@@ -602,6 +602,7 @@
 ## ADR-0029 交易上下文与跨调用不变量（候选，含证据链与推荐，待你决策）
 
 - 背景：P0 状态攻击（2026-10-19）证明「每次调用单看都合法」不等于「整条交易合法」。当前 `policy/` 只做 per-call 的金额/商户/白名单检查，`budget/` 只做会话级累计；没有组件把 `catalog → checkout → intent → capture → order` 绑在一起。结果是：先 complete 后 capture 可以免单；capture 35 对 43.10 的购物车可以完成；同一 checkout 两个 intent 可以扣两次；两个 43.10 的 checkout 可以在 100 预算内完成两次购买。
+- **性质**：主因是**架构范围没有定义 I5（交易级不变量）**，不是 I1–I4 的实现回归——I1（无旁路）、I2（预算不超）、I3（链可验）、I4（可重构）在 P0 场景里都仍然成立。两个实现捷径把缺口放大成可利用漏洞：① mock merchant 的 token 只做 `startswith` / `endswith` 字符串检查；② `complete_checkout` 没有要求「先 capture」。所以它是「架构漏了一层 + 实现用了足够被利用的简化」，不是「实现违背了已承诺的交易不变量」——那条不变量此前不存在。
 - 证据：
   - 本仓库确定性探针 `eval/p0_state_attacks.py`（无需模型）：免单 43.10、少扣 8.10、同一 checkout 双扣 86.20、拆单两笔 86.20、先履约后扣款 43.10、**伪造 `pt_forged_<checkout>` 免单 43.10**；`over_capture` 被 PSP 拦住。原始表在 `docs/redteam-log.md` 的 P0 节与 `docs/evaluation.md` §6d。
   - **token 不是能力**：`complete_checkout` 只检查 `startswith("pt_")` 与 `endswith(checkout_id)`；F12 里模型生成的双后缀 token 也被接受。任何人知道 checkout_id 就能拼出 token 完成订单。
@@ -609,10 +610,17 @@
   - **AP2 manipulated checkout**：官方 Security Considerations 要求 closed mandate 用 `sd_hash` 绑定到 open mandate，并对金额/收款方做 constraint evaluation；这正是「跨调用字段绑定」的协议级先例。
   - **AgentLAB / tool chaining**：长程攻击把「单独允许的工具调用序列」作为一类攻击面；与本项目的「拆单/多 intent/先履约后扣款」同构。
   - **我们自己的 I2**：预算不变量是会话级 `committed + holds ≤ limit`；它证明「总额不超」，不证明「一次 consent 只扣一次」。
+  - **行业调研（2026-10-19）**：
+    - **Stripe PaymentIntents**（[官方文档](https://docs.stripe.com/payments/payment-intents)）：官方建议「每个 PaymentIntent 通常对应一个购物车或客户会话」；结账中断恢复时**复用同一个 PaymentIntent**；幂等键通常基于购物车/会话 ID，防止同一购买创建重复 intent。→ 支持「一个 checkout 一个有效 intent」。
+    - **Stripe multicapture**（[官方文档](https://docs.stripe.com/payments/multicapture)）：一个 PaymentIntent 最多允许 50 次非最终 capture；例如授权 10 USD、先 capture 7 USD，剩余 3 USD 仍保持授权。→ **反驳「每次 capture 必须等于购物车总额」**；正确的不变量应是「完成时累计 capture = 总额，或显式记录部分履约/剩余余额」。
+    - **Stripe MPP 的五维绑定**（[阿里云开发者社区 2026-10-12 的拆解](https://developer.aliyun.com/article/1770471)）：用户目标↔商品、报价↔商户、授权↔金额上限、付款↔幂等键、交付↔交易；强调「支付成功只是最后一个结果」。→ 与 I5 的交易上下文同构。
+    - **ACP / UCP**（[WooCommerce 的 UCP/ACP 实现说明](https://pt-ao.wordpress.org/plugins/ucp-acp-agent-for-woocommerce/)）：checkout-session 生命周期、幂等、Shared Payment Token、签名 webhook；协议把很多绑定放在 merchant/PSP 侧，agent 侧仍需自己保证不重复消费。
+    - **Visa Intelligent Commerce / Mastercard Agent Pay**（[Visa 2026-04-08](https://usa.visa.com/about-visa/newsroom/press-releases.releaseId.22276.html)；[Mastercard Agent Pay](https://www.mastercard.com/news/latin-america/es/sala-de-prensa/comunicados-de-prensa/pr-es/2026/septiembre/la-inteligencia-artificial-ya-no-solo-recomienda-comienza-a-comprar-y-pagar/)）：tokenization、spend controls、authentication；Mastercard 明确用**单次使用的 tokenized credential**。→ 支持「payment token 必须是可验证、单次使用的凭证」，而不是可拼的字符串。
+    - **MCP 网关**：公开实现大多停在工具级 RBAC / 聚合 / 脱敏；没有把 checkout → intent → capture → order 作为一等状态机。→ 这是本项目的差异化空间，也是行业尚未统一的部分。
 - 推荐（方案 A：网关持有最小交易上下文）：在 `enforce/` 旁增加一个 `transaction/` 状态机（只服务固定工具，不做通用 DSL）：
-  1. `capture_payment`：按 `payment_intent_id → checkout_ref` 找到权威 checkout，要求 `currency`、`merchant_id`、**capture 金额 = checkout.total**；不接受「≤ 授权额」作为唯一条件。
-  2. `complete_checkout`：要求同一 checkout 已有 `succeeded` capture，且 capture 金额 = checkout.total；**payment token 必须是 PSP 签发、带签名/不可预测 nonce、可向 PSP 验证的凭证**，不能是拼出来的字符串。
-  3. 同一 `checkout_ref` 只允许一个有效/成功的 payment intent；重复 create 返回冲突，不新建。
+  1. `capture_payment`：按 `payment_intent_id → checkout_ref` 找到权威 checkout，要求 `currency`、`merchant_id`、**累计 capture 不超过授权额**；**完成时累计 capture = checkout.total，除非订单显式记录部分履约 / 剩余余额**。不把「每次 capture = 总额」写死——Stripe multicapture 证明部分捕获是合法能力。
+  2. `complete_checkout`：要求同一 checkout 已有 `succeeded` capture；**累计 capture = checkout.total，或订单显式标记部分履约**；**payment token 必须是 PSP 签发、带签名/不可预测 nonce、单次使用、可向 PSP 验证的凭证**，不能是拼出来的字符串。
+  3. 同一 `checkout_ref` 只允许一个有效/成功的 payment intent；重复 create 返回冲突，不新建。注意这是比 Stripe「通常一个购物车一个 intent」更严格的设计选择，不是协议硬要求；如果未来要支持 multicapture，允许同一 intent 的多次 capture，但仍禁止同一 checkout 的第二个 intent。
   4. mandate 新增 `max_transactions`（默认 1）；预算账本按 `(mandate_id, checkout_id)` 记录消费，拆单超过笔数直接拒。
   5. 状态落 SQLite（与 budget 同库或同目录），证据里记录 `transaction_id` 与状态迁移；崩溃后可恢复。
 - 备选：a) 只在文档里承认缺口，不改代码；b) 把校验推给 PSP/merchant；c) 通用工作流 DSL；d) 只加 `complete` 前检查 capture（最小补丁）。
@@ -621,6 +629,7 @@
 - 为什么不选 c：通用 DSL 会把项目拖进「工作流引擎」，超出 demo 范围；固定四个绑定足够覆盖 Agentic Commerce 的主路径。
 - 为什么不选 d：只补 `complete` 会留下少扣、双 intent、拆单三个缺口；交易上下文一次建好更干净。
 - 影响面：新增 `transaction/`、`enforce.py` 接线、`policy/schema.py` 的 `max_transactions`、`mandate` 解析、证据 schema（新增 `transaction_id` 字段）、测试（P0 六个场景转为回归）；不改变「单一执行点」与「构造/校验/透传」三分类。
+- 证据检查结论：**整体支持交易上下文与 token 验证；部分修正了 capture 的不变量**。行业证据支持「一个 checkout 一个 intent」「token 必须是单次可验证凭证」「完成前必须对账」；但 Stripe multicapture 说明「每次 capture = 总额」过严，应改为「完成时累计 capture = 总额，或显式部分履约」。这条修正让方案更接近真实支付语义，而不是把 demo 的简化当成行业规则。
 - 决策（**待你决策**）：建议采纳 A。采纳前不改产品代码，只保留探针与证据。
 
 ## 参考笔记（AI 记录，非决策本身）
