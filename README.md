@@ -90,7 +90,7 @@ authorize → decide → enforce → record_pending → forward
 
 | 编号 | 不变量 | 当前证据 |
 | --- | --- | --- |
-| **I1** | 不存在未经 Decision 就放行的方法调用 | 单一执行点、分层契约、T1–T9、139 条测试 |
+| **I1** | 不存在未经 Decision 就放行的方法调用 | 单一执行点、分层契约、T1–T9、139 passed / 1 xfailed |
 | **I2** | `sum(committed) + sum(active holds) ≤ limit` | 50 路并发 reserve，0 超支 |
 | **I3** | 篡改任一证据记录必然 verify 失败 | 4/4 篡改场景检出，干净链通过 |
 | **I4** | 同一证据包可以重构决策序列 | 6/6 条可重构，输入件撤下后链仍可验 |
@@ -160,7 +160,7 @@ uv run python scripts/run_w2_demo.py
 
 | 声称 | 证据 | 状态 |
 | --- | --- | --- |
-| 每次被拦截调用都经过 Decision | T1–T9、三条越权通道、分层契约、139 条测试 | 支持 |
+| 每次被拦截调用都经过 Decision | T1–T9、三条越权通道、分层契约、139 passed / 1 xfailed | 支持 |
 | 并发下预算不超支 | 50 路并发，0 超支，hold 回收 | 支持 |
 | 审批绑定到具体动作 | form / CLI / 老客户端 fail-closed、`action_hash` | 支持 |
 | 证据可验、决策可重构 | 4/4 篡改检出、6/6 重构 | 支持 |

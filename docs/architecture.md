@@ -2,7 +2,6 @@
 
 [中文](architecture.md) · [English](architecture.en.md)
 
-
 > 本文件由 AI 从既有的架构讨论转写（2026-10-05），**内容与讨论结论一致，未改动架构本身**。
 > 架构变更流程见 `AGENTS.md`：需充分证据、User 明确认可，并记入 `docs/decisions.md`。
 

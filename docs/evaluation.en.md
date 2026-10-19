@@ -236,7 +236,7 @@ There is still a belief-layer signal: the injected group 5/5 repeats "taco conta
 
 | Claim | Current evidence | Status |
 | --- | --- | --- |
-| Every call passes a Decision (I1) | T1–T9, three unauthorized channels, import-linter, 139 tests | **supported** |
+| Every call passes a Decision (I1) | T1–T9, three unauthorized channels, import-linter, 139 passed / 1 xfailed | **supported** |
 | Budget does not overspend (I2) | 50 concurrent, 0 overspend, hold reclamation | **supported** |
 | Approval bound to action | form / CLI / legacy fail-closed, `action_hash` | **supported** |
 | Evidence verifiable, decisions reconstructable (I3/I4) | 4/4 tamper detection, 6/6 reconstruction | **supported** |

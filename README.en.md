@@ -90,7 +90,7 @@ authorize → decide → enforce → record_pending → forward
 
 | ID | Invariant | Current evidence |
 | --- | --- | --- |
-| **I1** | No method call is allowed without a Decision | single execution point, layering contract, T1–T9, 139 tests |
+| **I1** | No method call is allowed without a Decision | single execution point, layering contract, T1–T9, 139 passed / 1 xfailed |
 | **I2** | `sum(committed) + sum(active holds) ≤ limit` | 50 concurrent reserves, 0 overspend |
 | **I3** | Tampering with any evidence record must fail verification | 4/4 tamper cases detected; clean chain passes |
 | **I4** | A run package can reconstruct its decision sequence | 6/6 reconstructable; the chain still verifies after replay inputs are removed |
@@ -160,7 +160,7 @@ Evaluation is organized **claim first**: define the decision rule, then ask whet
 
 | Claim | Evidence | Status |
 | --- | --- | --- |
-| Every intercepted call passes a Decision | T1–T9, three bypass channels, layering contract, 139 tests | supported |
+| Every intercepted call passes a Decision | T1–T9, three bypass channels, layering contract, 139 passed / 1 xfailed | supported |
 | Budget does not overspend under concurrency | 50 concurrent reserves, 0 overspend, holds reclaimed | supported |
 | Approval is bound to the action | form / CLI / legacy fail-closed, `action_hash` | supported |
 | Evidence is tamper-evident and reconstructable | 4/4 tamper checks, 6/6 reconstruction | supported |
