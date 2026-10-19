@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """Commerce MCP Gateway — deterministic CLI demo.
 
 The demo is a *story about evidence*, not a storefront. It runs the real gateway
