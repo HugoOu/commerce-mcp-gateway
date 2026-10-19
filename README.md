@@ -156,6 +156,8 @@ uv run python scripts/run_w2_demo.py
 
 ## Demo（纯 CLI）
 
+![CLI demo](docs/demo.gif)
+
 一条命令演出正路、两层拒绝、F14 真实轨迹回放、审批与审计：
 
 ```bash

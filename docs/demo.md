@@ -159,6 +159,8 @@ vhs docs/demo-f14.tape
 
 会生成 `docs/demo.gif` 和 `docs/demo-f14.gif`。没有 VHS 就用 ScreenToGif 或 OBS 录同样命令，GIF 控制在 5 MB 以内。
 
+当前仓库已包含 `docs/demo.gif`（transaction 幕，2× 加速，约 19 秒，277 KB）。
+
 ## 文件
 
 | 文件 | 用途 |
@@ -167,6 +169,7 @@ vhs docs/demo-f14.tape
 | `demo/fixtures/f14_attempt.json` | 真实 F14 轨迹的脱敏录制 |
 | `docs/demo.md` | 本运行手册 |
 | `docs/demo.en.md` | 英文运行手册 |
+| `docs/demo.gif` | README 用的 transaction 幕 GIF（2× 加速） |
 | `docs/demo.tape` | transaction 幕的 VHS 录制脚本 |
 | `docs/demo-f14.tape` | F14 幕的 VHS 录制脚本 |
 | `runs/demo/` | 生成的证据与预算文件（已 gitignore） |

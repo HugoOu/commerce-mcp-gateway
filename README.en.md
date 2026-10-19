@@ -156,6 +156,8 @@ uv run python scripts/run_w2_demo.py
 
 ## Demo (CLI only)
 
+![CLI demo](docs/demo.gif)
+
 One command runs the happy path, both denial layers, the recorded F14 trajectory, approval and audit:
 
 ```bash

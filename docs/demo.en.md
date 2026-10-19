@@ -161,6 +161,8 @@ vhs docs/demo-f14.tape
 
 The tapes write `docs/demo.gif` and `docs/demo-f14.gif`. If VHS is not available, record the same commands with ScreenToGif or OBS and keep the GIF under 5 MB.
 
+The repository already contains `docs/demo.gif` (transaction act, 2× speed, about 19 seconds, 277 KB).
+
 ## Files
 
 | File | Purpose |
@@ -168,6 +170,7 @@ The tapes write `docs/demo.gif` and `docs/demo-f14.gif`. If VHS is not available
 | `scripts/demo.py` | CLI story, assertions and rendering |
 | `demo/fixtures/f14_attempt.json` | sanitized recording of the real F14 trajectory |
 | `docs/demo.md` | this runbook |
+| `docs/demo.gif` | README GIF for the transaction act (2× speed) |
 | `docs/demo.tape` | VHS tape for the transaction act |
 | `docs/demo-f14.tape` | VHS tape for the F14 act |
 | `runs/demo/` | generated evidence and budget files (git-ignored) |
