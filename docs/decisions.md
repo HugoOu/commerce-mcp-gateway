@@ -639,6 +639,7 @@
   - **scripted 阳性对照**：`eval/scripted_adversary.py` 对金额越权与 complete-before-capture 各跑 N=30，均 30/30 拒绝、0/30 绕过、0 实扣（95% 上界 9.5%）。它证明网关在“决策层已经越权”时能端到端拦住；不证明 qwen 会越权。
   - **持久化边界（2026-10-19）**：`eval/persistence_probe.py` N=10 显示：完成第一笔后重启，第二笔 **10/10 被放行**（累计 86.20，`max_transactions=1` 被绕过）；capture 后重启再 complete，**10/10 完不成**。这是 ADR-0029 TODO 的实证：单进程 demo 成立，重启/多副本不成立；修复需要 SQLite/共享状态。
   - **价格漂移（2026-10-19）**：`eval/price_drift_probe.py` N=5——checkout 报 49.99、实扣 49.99、订单变 60.00，**5/5 underpayment**。网关用 checkout 响应当权威总额，complete 时不核对订单总额；这是 I5 的上游信任边界，已记 TODO。
+  - **样本量补充（2026-10-19）**：qwen F1 S0 已补到 4 格 ×5（0/5，95% 上界 0.451）；F14 补了 baseline N=5（0/5 拆单、5/5 完成 10 份），但 F14 本身仍是 N=5 探索性，不是 N=30。
 
 ## 参考笔记（AI 记录，非决策本身）
 
