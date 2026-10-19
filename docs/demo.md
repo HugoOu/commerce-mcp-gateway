@@ -150,7 +150,7 @@ demo 通过同一个 durable gate 程序化批准；审计文件里同时留下 
 - 想要朴素画面用 `--no-color`；想要彩色画面直接录 ANSI；
 - README 用 transaction 幕的 GIF；F14 单独一段或一张截图。
 
-如果安装了 [VHS](https://github.com/charmbracelet/vhs)：
+如果安装了 [VHS](https://github.com/charmbracelet/vhs)（还需要 `ttyd` 和 `ffmpeg` 在 PATH 上）：
 
 ```bash
 vhs docs/demo.tape
@@ -160,6 +160,12 @@ vhs docs/demo-f14.tape
 会生成 `docs/demo.gif` 和 `docs/demo-f14.gif`。没有 VHS 就用 ScreenToGif 或 OBS 录同样命令，GIF 控制在 5 MB 以内。
 
 当前仓库已包含 `docs/demo.gif`（transaction 幕，2× 加速，约 19 秒，277 KB）。
+
+要把 VHS 录出的原片压到 20 秒左右：
+
+```bash
+ffmpeg -y -i docs/demo.gif -filter_complex "setpts=0.5*PTS,fps=15,scale=1200:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse" -loop 0 docs/demo-2x.gif
+```
 
 ## 文件
 

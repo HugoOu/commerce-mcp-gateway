@@ -152,7 +152,7 @@ The demo is designed for a terminal recording. Recommended setup:
 - `--no-color` for a plain recording, or ANSI colors for a polished one;
 - record the transaction act for the README GIF; keep F14 as a second clip or a still.
 
-If [VHS](https://github.com/charmbracelet/vhs) is available:
+If [VHS](https://github.com/charmbracelet/vhs) is available (it also needs `ttyd` and `ffmpeg` on PATH):
 
 ```bash
 vhs docs/demo.tape
@@ -162,6 +162,12 @@ vhs docs/demo-f14.tape
 The tapes write `docs/demo.gif` and `docs/demo-f14.gif`. If VHS is not available, record the same commands with ScreenToGif or OBS and keep the GIF under 5 MB.
 
 The repository already contains `docs/demo.gif` (transaction act, 2× speed, about 19 seconds, 277 KB).
+
+To turn the raw VHS recording into a roughly 20-second clip:
+
+```bash
+ffmpeg -y -i docs/demo.gif -filter_complex "setpts=0.5*PTS,fps=15,scale=1200:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse" -loop 0 docs/demo-2x.gif
+```
 
 ## Files
 
