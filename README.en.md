@@ -154,6 +154,19 @@ uv run python scripts/run_w2_demo.py
 
 `scripts/run_w2_demo.py` starts the mock merchant/PSP, boots the gateway, runs the agent loop and prints the gateway evidence log.
 
+## Demo (CLI only)
+
+One command runs the happy path, both denial layers, the recorded F14 trajectory, approval and audit:
+
+```bash
+uv run python scripts/demo.py          # about 5 minutes; no model key
+uv run python scripts/demo.py --fast   # about 70 seconds
+uv run python scripts/demo.py --deep   # adds the historical guard-off probe
+uv run python scripts/demo.py --json   # machine-readable result
+```
+
+F14 is a real `qwen3.8-27b` trajectory replay: exploratory N=5, 2/5 is the attempt rate, the attack success rate is 0/5, and there are 0 double charges. The full narration, expected output and recording guide are in [demo.en.md](docs/demo.en.md).
+
 ## Evaluation summary
 
 Evaluation is organized **claim first**: define the decision rule, then ask whether the evidence supports the claim.
@@ -186,6 +199,7 @@ src/agent/         thin driver: MCP client + replaceable ModelClient
 src/mcp_servers/   mock merchant, mock PSP, fault injection
 eval/              experiments, probes, statistics and red-team scripts
 scripts/           demo and smoke scripts
+demo/              CLI demo and the sanitized F14 fixture
 tests/             unit, integration, adversarial and invariant tests
 docs/              architecture, decisions, threat model, evaluation and reproduction notes
 ```
@@ -199,6 +213,7 @@ docs/              architecture, decisions, threat model, evaluation and reprodu
 | Threat model | [threat-model.md](docs/threat-model.md) | [threat-model.en.md](docs/threat-model.en.md) |
 | Risk decisioning | [risk-decisioning.md](docs/risk-decisioning.md) | [risk-decisioning.en.md](docs/risk-decisioning.en.md) |
 | Architecture decisions | [decisions.md](docs/decisions.md) | [decisions.en.md](docs/decisions.en.md) (index) |
+| Demo | [demo.md](docs/demo.md) | [demo.en.md](docs/demo.en.md) |
 | Code tour | [code-tour.md](docs/code-tour.md) | Chinese |
 | Mock world | [mock-world.md](docs/mock-world.md) | Chinese |
 | Red-team log | [redteam-log.md](docs/redteam-log.md) | Chinese |

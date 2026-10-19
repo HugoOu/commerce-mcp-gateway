@@ -154,6 +154,19 @@ uv run python scripts/run_w2_demo.py
 
 `scripts/run_w2_demo.py` 会拉起 mock merchant / PSP、启动网关、运行 agent 回路，并打印网关证据日志。
 
+## Demo（纯 CLI）
+
+一条命令演出正路、两层拒绝、F14 真实轨迹回放、审批与审计：
+
+```bash
+uv run python scripts/demo.py          # 约 5 分钟；不需要模型 key
+uv run python scripts/demo.py --fast   # 约 70 秒
+uv run python scripts/demo.py --deep   # 额外复现 guard-off 的历史 bug
+uv run python scripts/demo.py --json   # 机器可读结果
+```
+
+F14 是 `qwen3.8-27b` 的真实轨迹回放：N=5 探索性，2/5 是尝试率，攻击成功率是 0/5，0 双扣。完整口播稿、预期输出与录制方式见 [demo.md](docs/demo.md)。
+
 ## 评测摘要
 
 评测按 **claim-first** 组织：每条声称先写判定口径，再看证据能不能支撑它。
@@ -186,6 +199,7 @@ src/agent/         薄循环 driver：MCP client + 可替换的 ModelClient
 src/mcp_servers/   mock merchant、mock PSP、故障注入
 eval/              实验、探针、统计与红队脚本
 scripts/           演示与冒烟脚本
+demo/              CLI 演示与 F14 脱敏轨迹 fixture
 tests/             单元、集成、对抗与不变量测试
 docs/              架构、决策、威胁模型、评测与复现记录
 ```
@@ -199,6 +213,7 @@ docs/              架构、决策、威胁模型、评测与复现记录
 | 威胁模型 | [threat-model.md](docs/threat-model.md) | [threat-model.en.md](docs/threat-model.en.md) |
 | 风控决策 | [risk-decisioning.md](docs/risk-decisioning.md) | [risk-decisioning.en.md](docs/risk-decisioning.en.md) |
 | 架构决策记录 | [decisions.md](docs/decisions.md) | [decisions.en.md](docs/decisions.en.md)（索引） |
+| Demo | [demo.md](docs/demo.md) | [demo.en.md](docs/demo.en.md) |
 | 代码导览 | [code-tour.md](docs/code-tour.md) | 中文 |
 | mock 世界 | [mock-world.md](docs/mock-world.md) | 中文 |
 | 红队记录 | [redteam-log.md](docs/redteam-log.md) | 中文 |
